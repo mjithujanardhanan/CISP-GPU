@@ -54,36 +54,42 @@ __constant__ float D_LSC[4];
 struct configuration
 {
     
-    int length=0;
-    int width=0;
-    float white_level = 65535.0f;  //assumed 16 bit precision
-    int orientation=0;
+    int     length=0;
+    int     width=0;
+    float   white_level = 65535.0f;  //assumed 16 bit precision
+    int     orientation=0;
 
-    bool DPC = true;
-    float DPC_threshold=0;
+    bool    DPC = true;
+    float   DPC_threshold=0;
 
-    bool BLC = true;
+    bool    BLC = true;
     std::vector<float> BLC_Offset;
 
-    bool LSC = true;
+    bool    LSC = true;
     std::vector<float> LSC_gain;
-    float LSC_Max_radius=0.0f;
+    float   LSC_Max_radius=0.0f;
 
-    bool AWB = true;
+    bool    AWB = true;
     std::vector<float> AWB_gain;
-    bool AWB_Value_Given = false;
+    bool    AWB_Value_Given = false;
 
     std::vector<float> CCM_gain;
-    bool CCM=true;
+    bool    CCM=true;
 
-    bool Color_Space_Conversion = true;
-    bool Brightness = false;
-    float Brightness_value = 1.0f;
-    bool Saturation = false;
-    float Saturation_value = 1.0f;
+    bool    Color_Space_Conversion = true;
+    bool    Brightness = false;
+    float   Brightness_value = 1.0f;
+    bool    Saturation = false;
+    float   Saturation_value = 1.0f;
 
-    bool GAMMA=true;
-    float GAMMA_VALUE = 2.2f;
+    bool    GAMMA=true;
+    float   GAMMA_VALUE = 2.2f;
+
+    bool    Bilateral_Filter = false;
+    int     Bilateral_kernel_size = 3;
+    float   Bilateral_Domain_STD = 10.0f;
+    float   Bilateral_Range_STD = 10.0f;
+
     
     
 };
@@ -724,6 +730,7 @@ __global__ void Scaling_kernel_3Channel( float* channel_1, float* channel_2, flo
     }
 }
 
+/* This program is for converting datatype of image to 8-bit integer*/
 __global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, int* gint, int*bint, float white_value, int width, int length)
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
@@ -735,6 +742,106 @@ __global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, in
         bint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,blue[idx] *255.0f/white_value)));
     }
 }
+
+
+/* this kernel performs bilateral filtering on the image*/
+
+__forceinline__ __device__ int reflect_padding(int id, int limit)
+{
+    if(id < 0) return -1 * id;
+    else if(id >= limit) return 2*(limit-1) -id;
+    else return id;
+} 
+
+__global__ void Bilateral_filter_kernel(float* channel_input, float* channel_output, int shared_size, int padding, float dim_variance, float range_variance,  int width, int length)
+{
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+    int idx= (y)* width  + (x);  
+    //int shared_size = block_dim + 2*padding;
+    int ty = threadIdx.y, tx = threadIdx.x;
+    int ty0 = ty+padding, tx0 = tx+padding;
+    extern __shared__ float buffer[];
+    for(int l = 0; (ty + l * block_dim) < shared_size; l++)
+        for(int m = 0; (tx + m * block_dim)< shared_size; m++)
+        {
+            int x0 = reflect_padding((x - padding) + m * block_dim , width );
+            int y0 = reflect_padding((y - padding) + l * block_dim , length );
+
+            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_input[y0 * width + x0];
+        }
+
+    __syncthreads();
+    if(y<length && x<width)
+    {
+        float central_pixel = buffer[ty0 * shared_size + tx0];
+        float norm_sum = 0.0f, kernel_sum = 0.0f;
+        float dim_pdt = 1.0f / (2.0f *dim_variance*dim_variance);
+        float range_pdt = 1.0f / (2.0f *range_variance * range_variance);
+        for(int i=-padding; i <= padding; i++)
+            for(int j=-padding; j <= padding; j++)
+            {
+                float neighbor_pixel = buffer[(ty0 + i) * shared_size +(tx0+j)],temp, diff = central_pixel - neighbor_pixel;
+                temp = __expf( -(( i*i + j*j )*(dim_pdt) + ((diff )*(diff) )* (range_pdt)));
+                norm_sum += temp;
+                kernel_sum += neighbor_pixel* temp;
+            }
+        channel_output[idx] = (kernel_sum / norm_sum);
+    }
+
+}
+
+// /* this kernel performs bilateral filtering on the image*/
+// __global__ void Guided_filter_kernel(float* channel, int kernal_size, int padding, int width, int length)
+// {
+
+//     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+//     int idx= (y)* width  + (x);  
+//     int shared_size = block_dim + 2*padding;
+//     int ty = threadIdx.y, tx = threadIdx.x;
+
+//     extern __shared__ float buffer[];
+//     for(int l = 0; (ty + l * block_dim) < shared_size; l++)
+//         for(int m = 0; (tx + m * block_dim)< shared_size; m++)
+//         {
+//             int x0 = reflect_padding((x - padding) + m * block_dim , width );
+//             int y0 = reflect_padding((y - padding) + l * block_dim , length );
+
+//             buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel[y0 * width + x0];
+//         }
+
+//     __syncthreads();
+//     if(y<length && x<width)
+//     {
+
+//     }
+// }
+
+// /* this kernel performs gaussian filtering on the image*/
+// __global__ void Guided_filter_kernel(float* channel, int kernal_size, int padding, int width, int length)
+// {
+//     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+//     int idx= (y)* width  + (x);  
+//     int shared_size = block_dim + 2*padding;
+//     int ty = threadIdx.y, tx = threadIdx.x;
+
+//     extern __shared__ float buffer[];
+//     for(int l = 0; (ty + l * block_dim) < shared_size; l++)
+//         for(int m = 0; (tx + m * block_dim)< shared_size; m++)
+//         {
+//             int x0 = reflect_padding((x - padding) + m * block_dim , width );
+//             int y0 = reflect_padding((y - padding) + l * block_dim , length );
+
+//             buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel[y0 * width + x0];
+//         }
+
+//     __syncthreads();
+//     if(y<length && x<width)
+//     {
+
+//     }
+// }
+
+
 
 // Host code for Image Signal Processing Pipeline
 py::tuple ISP(py::array_t<float> Image, const configuration& cfg )    
@@ -808,7 +915,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     //
     //
     ////////////////////////////////////////////////////
-    cudaFree(D_Image_1);
+    float* channel_temp = D_Image_1;
 
     ////////////////////////////////////////////////////
     //
@@ -967,6 +1074,31 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     ////////////////////////////////////////////////////
     //
     //
+    // edge aware low pass filtering - Bilateral kernel on luminance channel
+    //  Channel_0 :: Y   Channel_1 :: U    Channel_2 :: V
+    //
+    ////////////////////////////////////////////////////
+    if(cfg.Color_Space_Conversion && cfg.Bilateral_Filter)
+    {
+
+        int padding = cfg.Bilateral_kernel_size /2;
+        int shared_size = block_dim + 2 * padding;
+        float bilateral_scaled_std = ( cfg.Bilateral_Range_STD ) * 65535 / (cfg.white_level);
+        size_t shared_memory_vol = shared_size * shared_size * sizeof(float);
+        Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp, shared_size, padding, cfg.Bilateral_Domain_STD , bilateral_scaled_std,  cfg.width, cfg.length);
+        cudaDeviceSynchronize();
+
+        float* buf = channel_temp;
+        channel_temp = CHANNEL_0;
+        CHANNEL_0 = buf;
+
+
+    }
+
+
+    ////////////////////////////////////////////////////
+    //
+    //
     //  Brightness and Saturation Adjustment
     //  Channel_0 :: Y   Channel_1 :: U    Channel_2 :: V
     //
@@ -1066,6 +1198,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     cudaFree(RED);
     cudaFree(GREEN);
     cudaFree(BLUE);
+    cudaFree(channel_temp);
 
     return py::make_tuple(Red, Green, Blue);
     
@@ -1161,8 +1294,13 @@ PYBIND11_MODULE(ISP, m) {
         .def_readwrite("AWB_Value_Given", &configuration::AWB_Value_Given)
         .def_readwrite("Color_Space_Conversion", &configuration::Color_Space_Conversion)
         .def_readwrite("Brightness", &configuration::Brightness)
-        .def_readwrite("Brightness_value", &configuration::Brightness_value);
+        .def_readwrite("Brightness_value", &configuration::Brightness_value)
+        .def_readwrite("Bilateral_Filter", &configuration::Bilateral_Filter)
+        .def_readwrite("Bilateral_kernel_size", &configuration::Bilateral_kernel_size)
+        .def_readwrite("Bilateral_Domain_STD", &configuration::Bilateral_Domain_STD)
+        .def_readwrite("Bilateral_Range_STD", &configuration::Bilateral_Range_STD);
         
+
         
     // 2. Bind your functions
     // Note: If LSC takes the struct as an argument, define it like this:

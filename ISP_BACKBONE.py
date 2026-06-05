@@ -38,7 +38,11 @@ cfg.Color_Space_Conversion = True
 cfg.Brightness_value = 2.5
 cfg.Brightness = True
 cfg.Saturation = True
-cfg.Saturation_value = 1.3
+cfg.Saturation_value = 1.5
+cfg.Bilateral_Filter = True
+cfg.Bilateral_Domain_STD = 2.5
+cfg.Bilateral_Range_STD = 120.0
+cfg.Bilateral_kernel_size =7
 
 
 x = x.flatten()
