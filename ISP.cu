@@ -52,6 +52,9 @@ __constant__ float D_BLC_Offset[4];
 __constant__ float D_LSC[4];
 __constant__ float D_EDGE[256];     //max kernel size = 16 
 __constant__ float D_hue[4];
+__constant__ int D_width;
+__constant__ int D_length;
+
 
 struct configuration
 {
@@ -110,28 +113,28 @@ struct configuration
 
 
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
-__global__ void DP_kernel(float* Image , float* image_out, int width, int length, float threshold)                                                                                                // Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
+__global__ void DP_kernel(float* Image , float* image_out, float threshold)                                                                                                // Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
 {
 
     // directional gradient calculation
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y; // y,x are 2d image coordinates calculated from the thread id
-    int idx= (y)* width  + (x);  // idx is the id of (y,x) element in the flattened image
-    if(y<length && x<width) // out of bounds check
+    int idx= (y)* D_width  + (x);  // idx is the id of (y,x) element in the flattened image
+    if(y<D_length && x<D_width) // out of bounds check
     {
 
         int up = (y-2)<0?y+2:y-2;               //reflective padding implementation.(important in dpc calculation)
-        int down = (y+2)>=length?y-2:y+2;
+        int down = (y+2)>= D_length ?y-2:y+2;
         int left = (x-2)<0?x+2:x-2;
-        int right=(x+2)>=width?x-2:x+2;
+        int right=(x+2)>= D_width ?x-2:x+2;
 
-        int p1 = up * width + x;            //assigning ids to neighbor elements ( future updation to shared memory will remove this part)
-        int p2 = up * width + left;
-        int p3 = y * width + left;
-        int p4 = down * width + left;
-        int p5 = down * width + x;
-        int p6 = down * width + right;
-        int p7 = y * width + right;
-        int p8 = up * width + right;
+        int p1 = up * D_width + x;            //assigning ids to neighbor elements ( future updation to shared memory will remove this part)
+        int p2 = up * D_width + left;
+        int p3 = y * D_width + left;
+        int p4 = down * D_width + left;
+        int p5 = down * D_width + x;
+        int p6 = down * D_width + right;
+        int p7 = y * D_width + right;
+        int p8 = up * D_width + right;
 
 
         float d1,d2,d3,d4;                    //gradient calculation
@@ -174,12 +177,12 @@ __global__ void DP_kernel(float* Image , float* image_out, int width, int length
 }
 
 /* this program is an execution of Black Level correction on digital bayer domain images*/
-__global__ void BLC_kernel(float* Image, int width, int length)
+__global__ void BLC_kernel(float* Image)
 {
 
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
-    int idx= (y)* width  + (x);
-    if(y<length && x<width)
+    int idx= (y)* D_width  + (x);
+    if(y<D_length && x<D_width)
     {
 
        float offset[2][2]={{D_BLC_Offset[0],D_BLC_Offset[1]},{D_BLC_Offset[2],D_BLC_Offset[3]}};
@@ -193,17 +196,17 @@ __global__ void BLC_kernel(float* Image, int width, int length)
 }
 
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
-__global__ void LSC_kernel(float* Image , int width, int Length, float Max_radius)                                                                                                            // gain is for every color in bayer format image assed in the input configuration. 
+__global__ void LSC_kernel(float* Image ,  float Max_radius)                                                                                                            // gain is for every color in bayer format image assed in the input configuration. 
 {
 
     // Lens Shading Correction calculation
-    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
-    if(y<Length && x<width) //boundary check
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y; 
+    if(y<D_length && x<D_width) //boundary check
     {
-        int idx= (y)* width  + (x);
+        int idx= (y)* D_width  + (x);
         float a[2][2]={{D_LSC[0],D_LSC[1]},{D_LSC[2],D_LSC[3]}};
-        float dx = float(width)/2.0f  -(float)x; //dx distance from centre to x (here x is x)
-        float dy = float(Length)/2.0f -(float)y;//dy distance from centre to y (here y is y)
+        float dx = float(D_width)/2.0f  -(float)x; //dx distance from centre to x (here x is x)
+        float dy = float(D_length)/2.0f -(float)y;//dy distance from centre to y (here y is y)
         float r = sqrtf(dx*dx + dy*dy); //radius r calculation
         
         Image[idx] = Image[idx]*( 1.0f + r*a[y%2][x%2]/ Max_radius);  /*lens shading correction modelled as a linear function (original lens shading is modelled
@@ -216,7 +219,7 @@ __global__ void LSC_kernel(float* Image , int width, int Length, float Max_radiu
 }
 
 /* this program is an calculation of automatic white balance gain on digital bayer domain images*/
-__global__ void AWBG_kernel(float* Image , double* awbg,int orientation,int width, int length)                                                                                    // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||             || awbg- || 0-> green || 1-> blue || 2-> red  ||
+__global__ void AWBG_kernel(float* Image , double* awbg,int orientation)                                                                                    // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||             || awbg- || 0-> green || 1-> blue || 2-> red  ||
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;                                                                                                   // calculating the pixel coordinates y and x corresponding to the thread.
                                                                                                                                                            
@@ -228,9 +231,9 @@ __global__ void AWBG_kernel(float* Image , double* awbg,int orientation,int widt
     Red_sum[threadid]  = 0; 
     Blue_sum[threadid]  = 0; 
 
-    if(y<length && x<width)
+    if(y<D_length && x<D_width)
     {
-        int idx= (y)* width  + (x);                                                                                                                                                     // Idx is the index of the pixel in the flattened array. 
+        int idx= (y)* D_width  + (x);                                                                                                                                                     // Idx is the index of the pixel in the flattened array. 
         if(y&1 && x&1)
             {
                 if(orientation ==1 || orientation ==2)
@@ -319,13 +322,13 @@ __global__ void AWBG_kernel(float* Image , double* awbg,int orientation,int widt
     }
 }
 
-__global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float gain_b, int orientation,int width, int length)                                                 // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||             || awbg- || 0-> green || 1-> blue || 2-> red  ||
+__global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float gain_b, int orientation)                                                 // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||             || awbg- || 0-> green || 1-> blue || 2-> red  ||
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
-    int idx= (y)* width  + (x);
+    int idx= (y)* D_width  + (x);
 
 
-    if(y<length && x<width)
+    if(y<D_length && x<D_width)
     {
             if(y&1 && x&1)
             {
@@ -393,29 +396,29 @@ __global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float 
 }
 
 /* this program is an execution of edge aware interpolation of bayer domain image*/
-__global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation,int width, int length)                                       //green interpolation
+__global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation)                                       //green interpolation
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
-    int idx= abs(y-=2)* width  + abs(x-=2);
+    int idx= abs(y-=2)* D_width  + abs(x-=2);
 
     __shared__ float buffer[20][21];   // in format [y][x]
 
     int tx=threadIdx.x, ty=threadIdx.y;  // thread x and thread y
     buffer[ty][tx] =0;
-    if(y<length && x<width)
+    if(y<D_length && x<D_width)
     {
         buffer[ty][tx] = Image[idx];
     }
-    else if(y<length+2 && x<width+2)
+    else if(y<D_length+2 && x<D_width+2)
     {
         
-        if(length+1-y == 1) y=length-2;
-        else y=length-3;
+        if(D_length+1-y == 1) y=D_length-2;
+        else y=D_length-3;
 
-        if(width+1-x == 1) x=width-2;
-        else x=width-3;
+        if(D_width+1-x == 1) x=D_width-2;
+        else x=D_width-3;
 
-        idx= abs(y)* width  + abs(x);
+        idx= abs(y)* D_width  + abs(x);
         buffer[ty][tx] = Image[idx];
 
     }
@@ -425,9 +428,9 @@ __global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation,i
     if(tx>1 && tx<18 && ty>1 && ty<18)
     {
         x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
-        if(y<length && x<width)
+        if(y<D_length && x<D_width)
         {
-            int idx= y* width  + x;
+            int idx= y* D_width  + x;
             if(orientation == 0 || orientation == 3)
             {
                 if((x+y)&1)
@@ -487,10 +490,10 @@ __global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation,i
     }
 }
 
-__global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int orientation,int width, int length)                   //color interpolation
+__global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int orientation)                   //color interpolation
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
-    int idx= abs(y-=2)* width  + abs(x-=2);
+    int idx= abs(y-=2)* D_width  + abs(x-=2);
 
     __shared__ float buffer1[20][21], bufferg[20][21] ;
 
@@ -499,21 +502,21 @@ __global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float*
     buffer1[ty][tx]=0;
     bufferg[ty][tx]=0;
 
-    if(y<length && x<width)
+    if(y<D_length && x<D_width)
     {
         buffer1[ty][tx] = Image[idx];
         bufferg[ty][tx] = green[idx];
     }
-    else if(y<length+2 && x<width+2)
+    else if(y<D_length+2 && x<D_width+2)
     {
         
-        if(length+1-y == 1) y=length-2;
-        else y=length-3;
+        if(D_length+1-y == 1) y=D_length-2;
+        else y=D_length-3;
 
-        if(width+1-x == 1) x=width-2;
-        else x=width-3;
+        if(D_width+1-x == 1) x=D_width-2;
+        else x=D_width-3;
 
-        idx= abs(y)* width  + abs(x);
+        idx= abs(y)* D_width  + abs(x);
         buffer1[ty][tx] = Image[idx];
         bufferg[ty][tx] = green[idx];
 
@@ -524,9 +527,9 @@ __global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float*
     if(tx>1 && tx<18 && ty>1 && ty<18)
     {
         int x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
-        if(y<length && x<width)
+        if(y<D_length && x<D_width)
         {
-            int idx= y* width  + x;
+            int idx= y* D_width  + x;
             if(orientation == 0 || orientation == 3)
             {
                 if((x+y)&1)
@@ -665,14 +668,14 @@ __global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float*
 }
 
 /* this program is for applying transform matrix to the color image*/
-__global__ void Transform_Kernel(float* channel_1, float* channel_2, float* channel_3,  int width, int length)
+__global__ void Transform_Kernel(float* channel_1, float* channel_2, float* channel_3)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
     
     
-    if(y<length && x<width)
+    if(y<D_length && x<D_width)
     {
-        int idx= (y)* width  + (x); 
+        int idx= (y)* D_width  + (x); 
 
         float Temp_c1 =    channel_1[idx];
         float Temp_c2 =    channel_2[idx];
@@ -687,11 +690,11 @@ __global__ void Transform_Kernel(float* channel_1, float* channel_2, float* chan
 }
 
 /* This program is for applying Mapping using a Look Up Table(LUT) to the image on all channels*/
-__global__ void LUT_kernel( float* red, float* green, float* blue, float* LUT, float white_value, int width, int length)
+__global__ void LUT_kernel( float* red, float* green, float* blue, float* LUT, float white_value)
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
-    int idx= (y)* width  + (x);  
-    if(y<length && x<width)
+    int idx= (y)* D_width  + (x);  
+    if(y<D_length && x<D_width)
     {
         green[idx] = LUT[(int)roundf(fmaxf(0.0f,fminf(white_value, green[idx])))];
         red[idx] = LUT[(int)roundf(fmaxf(0.0f,fminf(white_value, red[idx])))];
@@ -700,22 +703,22 @@ __global__ void LUT_kernel( float* red, float* green, float* blue, float* LUT, f
 }
 
 /* This program is for applying Mapping using a Look Up Table(LUT) to the image on one channel*/
-__global__ void LUT_kernel( float* Channel, float* LUT, float white_value, int width, int length)
+__global__ void LUT_kernel( float* Channel, float* LUT, float white_value)
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
-    int idx= (y)* width  + (x);  
-    if(y<length && x<width)
+    int idx= (y)* D_width  + (x);  
+    if(y<D_length && x<D_width)
     {
         Channel[idx] = LUT[(int)roundf(fmaxf(0.0f,fminf(white_value,(Channel[idx]))))];
     }
 }
 
 /* This program is for Color control of the image*/
-__global__ void Color_control_kernel( float* channel_1, float* channel_2, float* channel_3, float bvalue, float svalue ,float cvalue,float tvalue,float vvalue ,bool brightness,bool saturation,bool hue,bool contrast,bool tint,bool vibrance,float hvalue, int width, int length)
+__global__ void Color_control_kernel( float* channel_1, float* channel_2, float* channel_3, float bvalue, float svalue ,float cvalue,float tvalue,float vvalue ,bool brightness,bool saturation,bool hue,bool contrast,bool tint,bool vibrance,float hvalue)
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
-    int idx= (y)* width  + (x);  
-    if(y<length && x<width)
+    int idx= (y)* D_width  + (x);  
+    if(y<D_length && x<D_width)
     {
 
         float c1 = channel_1[idx], c2 = channel_2[idx], c3 = channel_3[idx];
@@ -739,14 +742,14 @@ __global__ void Color_control_kernel( float* channel_1, float* channel_2, float*
         }
         if(tint)
         {
-            c3 += tint;
-            c2 -= 0.5f *tint;
+            c3 += tvalue;
+            c2 -= 0.5f *tvalue;
         }
         if(vibrance)
         {
             float chroma = sqrt(c2*c2 + c3*c3);
-            const float ch_lim = 0.4f ;
-            float sat = fminf(chroma / ch_lim, 1.0f);
+            float ch_lim = hvalue * 0.596f ;
+            float sat = fminf(chroma / ch_lim, hvalue);
 
             float gain = 1.0f + vvalue * (1.0f - sat);
 
@@ -761,11 +764,11 @@ __global__ void Color_control_kernel( float* channel_1, float* channel_2, float*
 }
 
 /* This program is for converting datatype of image to 8-bit integer*/
-__global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, int* gint, int*bint, float white_value, int width, int length)
+__global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, int* gint, int*bint, float white_value)
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
-    int idx= (y)* width  + (x);  
-    if(y<length && x<width)
+    int idx= (y)* D_width  + (x);  
+    if(y<D_length && x<D_width)
     {
         gint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,green[idx]*255.0f/white_value)));
         rint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,red[idx]  *255.0f/white_value)));
@@ -782,10 +785,10 @@ __forceinline__ __device__ int reflect_padding(int id, int limit)
     else return id;
 } 
 
-__global__ void Bilateral_filter_kernel(float* channel_input, float* channel_output, int shared_size, int padding, float dim_variance, float range_variance,  int width, int length)
+__global__ void Bilateral_filter_kernel(float* channel_input, float* channel_output, int shared_size, int padding, float dim_variance, float range_variance)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
-    int idx= (y)* width  + (x);  
+    int idx= (y)* D_width  + (x);  
     //int shared_size = block_dim + 2*padding;
     int ty = threadIdx.y, tx = threadIdx.x;
     int ty0 = ty+padding, tx0 = tx+padding;
@@ -793,14 +796,14 @@ __global__ void Bilateral_filter_kernel(float* channel_input, float* channel_out
     for(int l = 0; (ty + l * block_dim) < shared_size; l++)
         for(int m = 0; (tx + m * block_dim)< shared_size; m++)
         {
-            int x0 = reflect_padding((x - padding) + m * block_dim , width );
-            int y0 = reflect_padding((y - padding) + l * block_dim , length );
+            int x0 = reflect_padding((x - padding) + m * block_dim , D_width );
+            int y0 = reflect_padding((y - padding) + l * block_dim , D_length );
 
-            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_input[y0 * width + x0];
+            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_input[y0 * D_width + x0];
         }
 
     __syncthreads();
-    if(y<length && x<width)
+    if(y<D_length && x<D_width)
     {
         float central_pixel = buffer[ty0 * shared_size + tx0];
         float norm_sum = 0.0f, kernel_sum = 0.0f;
@@ -819,10 +822,10 @@ __global__ void Bilateral_filter_kernel(float* channel_input, float* channel_out
 
 }
 
-__global__ void Edge_enhancement_kernel(float* channel_input, float* channel_output, int shared_size, int padding, int kernel_size, float alpha,  int width, int length)
+__global__ void Edge_enhancement_kernel(float* channel_input, float* channel_output, int shared_size, int padding, int kernel_size, float alpha)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
-    int idx= (y)* width  + (x);  
+    int idx= (y)* D_width  + (x);  
     //int shared_size = block_dim + 2*padding;
     
     int ty = threadIdx.y, tx = threadIdx.x;
@@ -831,15 +834,15 @@ __global__ void Edge_enhancement_kernel(float* channel_input, float* channel_out
     for(int l = 0; (ty + l * block_dim) < shared_size; l++)
         for(int m = 0; (tx + m * block_dim)< shared_size; m++)
         {
-            int x0 = reflect_padding((x - padding) + m * block_dim , width );
-            int y0 = reflect_padding((y - padding) + l * block_dim , length );
+            int x0 = reflect_padding((x - padding) + m * block_dim , D_width );
+            int y0 = reflect_padding((y - padding) + l * block_dim , D_length );
 
-            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_input[y0 * width + x0];
+            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_input[y0 * D_width + x0];
         }
 
     
     __syncthreads();
-    if(y<length && x<width)
+    if(y<D_length && x<D_width)
     {
         float kernel_sum = 0.0f;
         float central_pixel = buffer[ty0 * shared_size + tx0];
@@ -883,6 +886,8 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     cudaMalloc( &D_Image_1, array_size * sizeof(float)); // creating memory pointers on gpu memory for image.
     cudaMalloc( &D_image_2, array_size * sizeof(float));
 
+    cudaMemcpyToSymbol(D_width, &cfg.width,  1 * sizeof(int));
+    cudaMemcpyToSymbol(D_length, &cfg.length, 1 * sizeof(int));
     ////////////////////////////////////////////////////
     //
     //
@@ -911,7 +916,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     ////////////////////////////////////////////////////
     if(cfg.DPC)
     {
-        DP_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_Image_1,D_image_2, cfg.width, cfg.length, cfg.DPC_threshold);          //calling __global__ function (CUDA kernel)
+        DP_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_Image_1,D_image_2, cfg.DPC_threshold);          //calling __global__ function (CUDA kernel)
         cudaDeviceSynchronize(); //wait until all kernels stop executing.
     }
     else
@@ -944,7 +949,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         }
         cudaMemcpyToSymbol( D_BLC_Offset, cfg.BLC_Offset.data(), 4 * sizeof(float));
 
-        BLC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2,cfg.width,cfg.length);
+        BLC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2);
         cudaDeviceSynchronize();
     }
 
@@ -962,7 +967,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
             throw std::runtime_error("LSC Gain must contain exactly 4 int values");
         }
         cudaMemcpyToSymbol( D_LSC, cfg.LSC_gain.data(), 4 * sizeof(float));
-        LSC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2,cfg.width,cfg.length,cfg.LSC_Max_radius);
+        LSC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2,cfg.LSC_Max_radius);
         cudaDeviceSynchronize();
 
     }
@@ -987,7 +992,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
             cudaMalloc( &D_AWBG, 3 * sizeof(double));
             cudaMemset( D_AWBG, 0, 3 * sizeof(double));
 
-            AWBG_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, D_AWBG, cfg.orientation, cfg.width, cfg.length);
+            AWBG_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, D_AWBG, cfg.orientation);
             cudaDeviceSynchronize();
 
             cudaMemcpy(H_AWBG, D_AWBG, 3 * sizeof(double), cudaMemcpyDeviceToHost);
@@ -1004,7 +1009,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
             GAIN_GREEN = cfg.AWB_gain[1];
             GAIN_BLUE = cfg.AWB_gain[2];
         }
-        AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, cfg.orientation, cfg.width, cfg.length);
+        AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, cfg.orientation);
         cudaDeviceSynchronize();
         
     }
@@ -1033,9 +1038,9 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     cudaMalloc(&GREEN, array_size * sizeof(int));
     cudaMalloc(&BLUE, array_size * sizeof(int));
 
-    DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, cfg.orientation, cfg.width, cfg.length); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
+    DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, cfg.orientation); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
     cudaDeviceSynchronize();
-    DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, CHANNEL_0, CHANNEL_2, cfg.orientation, cfg.width, cfg.length);
+    DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, CHANNEL_0, CHANNEL_2, cfg.orientation);
     cudaDeviceSynchronize();
 
     ////////////////////////////////////////////////////
@@ -1062,7 +1067,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         }
 
         cudaMemcpyToSymbol( D_MAT, cfg.CCM_gain.data(), 9 * sizeof(float));
-        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2, cfg.width, cfg.length);
+        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
         cudaDeviceSynchronize();
     }
 
@@ -1078,7 +1083,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     {
         float CSC[9] = {0.2988, 0.5869, 0.1143, -0.1687, -0.3313, 0.5, 0.5, -0.4187, -0.0813};
         cudaMemcpyToSymbol( D_MAT, CSC, 9 * sizeof(float));
-        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2, cfg.width, cfg.length);
+        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
         cudaDeviceSynchronize();
     }
 
@@ -1095,7 +1100,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         int padding = cfg.Bilateral_kernel_size /2;
         int shared_size = block_dim + 2 * padding;
         size_t shared_memory_vol = shared_size * shared_size * sizeof(float);
-        Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp, shared_size, padding, cfg.Bilateral_Domain_STD , cfg.Bilateral_Range_STD,  cfg.width, cfg.length);
+        Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp, shared_size, padding, cfg.Bilateral_Domain_STD , cfg.Bilateral_Range_STD);
         cudaDeviceSynchronize();
 
         float* buf = channel_temp;
@@ -1131,7 +1136,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
 
         cudaMemcpyToSymbol(D_EDGE, gaussian, kernel_vol * sizeof(float));
 
-        Edge_enhancement_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp, shared_size, padding, cfg.Edge_enhancement_kernel_size,  cfg.Edge_enhancement_A_Value,  cfg.width, cfg.length);
+        Edge_enhancement_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp, shared_size, padding, cfg.Edge_enhancement_kernel_size,  cfg.Edge_enhancement_A_Value);
         cudaDeviceSynchronize();
 
         float* buf = channel_temp;
@@ -1156,9 +1161,9 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         }
         cudaMemcpyToSymbol(D_hue, Hue_mat, 4 * sizeof(float));
 
+        float Hvalue =  0.5f * cfg.white_level;
 
-
-        Color_control_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0,CHANNEL_1,CHANNEL_2, cfg.Brightness_value, cfg.Saturation_value, cfg.Hue_value, cfg.Contrast_value, cfg.Tint_value, cfg.Vibrance_value, cfg.Brightness, cfg.Saturation, cfg.Hue, cfg.Contrast, cfg.Tint, cfg.Vibrance, 0.5f * cfg.white_value,  cfg.width, cfg.length);
+        Color_control_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0,CHANNEL_1,CHANNEL_2, cfg.Brightness_value, cfg.Saturation_value, cfg.Contrast_value, cfg.Tint_value, cfg.Vibrance_value, cfg.Brightness, cfg.Saturation, cfg.Hue, cfg.Contrast, cfg.Tint, cfg.Vibrance, Hvalue);
         cudaDeviceSynchronize();
         
 
@@ -1176,7 +1181,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     {
         float CSC[9] = {1, -0.0006, 1.4022, 1, -0.34468, -0.7139, 1, 1.77141, 0.00007};
         cudaMemcpyToSymbol( D_MAT, CSC, 9 * sizeof(float));
-        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2, cfg.width, cfg.length);
+        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
         cudaDeviceSynchronize();
     }
 
@@ -1206,7 +1211,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         }
 
         cudaMemcpy(D_LUT, LUT.data() , (cfg.white_level+1) *  sizeof(float), cudaMemcpyHostToDevice);
-        LUT_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, D_LUT, cfg.white_level, cfg.width, cfg.length);
+        LUT_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, D_LUT, cfg.white_level);
         cudaDeviceSynchronize();
         cudaFree(D_LUT);
     }
@@ -1225,7 +1230,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     int* G = static_cast<int*>(g_buf.ptr);
     int* B = static_cast<int*>(b_buf.ptr);
 
-    Norm_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, RED, GREEN, BLUE, cfg.white_level, cfg.width, cfg.length);
+    Norm_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, RED, GREEN, BLUE, cfg.white_level);
     cudaDeviceSynchronize();
 
     cudaMemcpy(R, RED, array_size*sizeof(int), cudaMemcpyDeviceToHost);
@@ -1252,10 +1257,10 @@ PYBIND11_MODULE(ISP, m) {
 
     Attributes
     ----------
-    width : int
-        Image width.
+    D_width : int
+        Image D_width.
 
-    length : int
+    D_length : int
         Image height.
 
     white_level : int

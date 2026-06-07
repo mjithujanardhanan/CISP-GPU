@@ -24,29 +24,41 @@ cfg.DPC =True
 cfg.DPC_threshold = 30
 cfg.BLC = True
 cfg.BLC_Offset = [2047, 2048, 2047, 2047]
-cfg.LSC = True
+cfg.LSC = False
 cfg.LSC_gain = [1.0, 1.0, 1.0, 1.0]
 cfg.LSC_Max_radius = 1.0
 cfg.AWB = True
 cfg.AWB_Value_Given = False
 cfg.AWB_gain = [1.8530800342559814, 0.9290269613265991, 1.3925764560699463]
-cfg.CCM = True
+cfg.CCM = False
 cfg.CCM_gain = [1.2, -0.1, -0.1, -0.1,  1.2,  -0.1, -0.1, -0.1, 1.2]
 cfg.GAMMA = True
 cfg.GAMMA_VALUE = 2.4
 cfg.Color_Space_Conversion = True
+
+cfg.Brightness = True
 cfg.Brightness_value = 2.5
-cfg.Brightness = False
-cfg.Saturation = False
-cfg.Saturation_value = 1.5
+cfg.Saturation = True
+cfg.Saturation_value = 1.2
+cfg.Hue = False
+cfg.Hue_value = np.pi/12
+cfg.Contrast = True
+cfg.Contrast_value = 1.01
+cfg.Tint = True
+cfg.Tint_value = 10
+cfg.Vibrance = True
+cfg.Vibrance_value = 2.0
+
+
+
 cfg.Bilateral_Filter = True
 cfg.Bilateral_Domain_STD = 2.5
 cfg.Bilateral_Range_STD = 120.0
 cfg.Bilateral_kernel_size =7
 cfg.Edge_enhancement = True
-cfg.Edge_enhancement_A_Value = 0.7
-cfg.Edge_enhancement_kernel_size = 7
-cfg.Edge_enhancement_STD = 0.5
+cfg.Edge_enhancement_A_Value = 0.2
+cfg.Edge_enhancement_kernel_size = 3
+cfg.Edge_enhancement_STD = 0.2
 
 
 x = x.flatten()
@@ -123,7 +135,6 @@ print("Time taken for processing the image: ", x2-x1, "seconds")
 image = np.dstack((R, G, B))
 image = np.astype(image, np.uint8)
 
-# image =  cv2.bilateralFilter(image, 9, 44, 90)
 image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 image = cv2.resize(image, (1920,1080))
 
