@@ -860,6 +860,14 @@ __global__ void Edge_enhancement_kernel(float* channel_input, float* channel_out
 // Host code for Image Signal Processing Pipeline
 py::tuple ISP(py::array_t<float> Image, const configuration& cfg )    
 {
+
+
+    cudaEvent_t start, stop;
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+
+    cudaEventRecord(start);
+
     ////////////////////////////////////////////////////
     //
     //
@@ -917,7 +925,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     if(cfg.DPC)
     {
         DP_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_Image_1,D_image_2, cfg.DPC_threshold);          //calling __global__ function (CUDA kernel)
-        cudaDeviceSynchronize(); //wait until all kernels stop executing.
+        //cudaDeviceSynchronize(); //wait until all kernels stop executing.
     }
     else
     {
@@ -950,7 +958,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         cudaMemcpyToSymbol( D_BLC_Offset, cfg.BLC_Offset.data(), 4 * sizeof(float));
 
         BLC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
     }
 
     ////////////////////////////////////////////////////
@@ -968,7 +976,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         }
         cudaMemcpyToSymbol( D_LSC, cfg.LSC_gain.data(), 4 * sizeof(float));
         LSC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2,cfg.LSC_Max_radius);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
 
     }
 
@@ -1010,7 +1018,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
             GAIN_BLUE = cfg.AWB_gain[2];
         }
         AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, cfg.orientation);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
         
     }
 
@@ -1039,9 +1047,9 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     cudaMalloc(&BLUE, array_size * sizeof(int));
 
     DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, cfg.orientation); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
     DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, CHANNEL_0, CHANNEL_2, cfg.orientation);
-    cudaDeviceSynchronize();
+    //cudaDeviceSynchronize();
 
     ////////////////////////////////////////////////////
     //
@@ -1068,7 +1076,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
 
         cudaMemcpyToSymbol( D_MAT, cfg.CCM_gain.data(), 9 * sizeof(float));
         Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
     }
 
     
@@ -1084,7 +1092,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         float CSC[9] = {0.2988, 0.5869, 0.1143, -0.1687, -0.3313, 0.5, 0.5, -0.4187, -0.0813};
         cudaMemcpyToSymbol( D_MAT, CSC, 9 * sizeof(float));
         Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
     }
 
     ////////////////////////////////////////////////////
@@ -1101,7 +1109,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         int shared_size = block_dim + 2 * padding;
         size_t shared_memory_vol = shared_size * shared_size * sizeof(float);
         Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp, shared_size, padding, cfg.Bilateral_Domain_STD , cfg.Bilateral_Range_STD);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
 
         float* buf = channel_temp;
         channel_temp = CHANNEL_0;
@@ -1131,13 +1139,12 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
             for(int j=-padding ; j <= padding ; j++)
             {
                 gaussian[(i+padding) * cfg.Edge_enhancement_kernel_size + (j+padding)] = std:: exp(-(i*i + j*j)/(2.0f * cfg.Edge_enhancement_STD * cfg.Edge_enhancement_STD) ) / (float)kernel_vol;
-                std::cout<< "  "<< gaussian[(i+padding) * cfg.Edge_enhancement_kernel_size + (j+padding)];
             }
 
         cudaMemcpyToSymbol(D_EDGE, gaussian, kernel_vol * sizeof(float));
 
         Edge_enhancement_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp, shared_size, padding, cfg.Edge_enhancement_kernel_size,  cfg.Edge_enhancement_A_Value);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
 
         float* buf = channel_temp;
         channel_temp = CHANNEL_0;
@@ -1164,7 +1171,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         float Hvalue =  0.5f * cfg.white_level;
 
         Color_control_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0,CHANNEL_1,CHANNEL_2, cfg.Brightness_value, cfg.Saturation_value, cfg.Contrast_value, cfg.Tint_value, cfg.Vibrance_value, cfg.Brightness, cfg.Saturation, cfg.Hue, cfg.Contrast, cfg.Tint, cfg.Vibrance, Hvalue);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
         
 
     }
@@ -1182,7 +1189,7 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         float CSC[9] = {1, -0.0006, 1.4022, 1, -0.34468, -0.7139, 1, 1.77141, 0.00007};
         cudaMemcpyToSymbol( D_MAT, CSC, 9 * sizeof(float));
         Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
-        cudaDeviceSynchronize();
+        //cudaDeviceSynchronize();
     }
 
 
@@ -1205,7 +1212,8 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
         for(int i=0;i<(cfg.white_level+1);i++)
         {
             x = (float)(i)/(cfg.white_level);
-            x = powf(x, (1.0f/cfg.GAMMA_VALUE));
+            x = powf(x , (1.0f/cfg.GAMMA_VALUE));
+            
 
             LUT[i] = (x*cfg.white_level);
         }
@@ -1244,6 +1252,14 @@ py::tuple ISP(py::array_t<float> Image, const configuration& cfg )
     cudaFree(GREEN);
     cudaFree(BLUE);
     cudaFree(channel_temp);
+
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+
+    float ms;
+    cudaEventElapsedTime(&ms, start, stop);
+
+    printf("Pipeline GPU time: %.3f ms\n", ms);
 
     return py::make_tuple(Red, Green, Blue);
     
