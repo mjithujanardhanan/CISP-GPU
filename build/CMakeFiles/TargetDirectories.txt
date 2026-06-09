@@ -1,3 +1,0 @@
-C:/Users/jithu/Desktop/git_repos/Differentiable-CUDA-based-ISP/build/CMakeFiles/ISP.dir
-C:/Users/jithu/Desktop/git_repos/Differentiable-CUDA-based-ISP/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/jithu/Desktop/git_repos/Differentiable-CUDA-based-ISP/build/CMakeFiles/ZERO_CHECK.dir
