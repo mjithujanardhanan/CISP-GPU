@@ -28,6 +28,8 @@ Operation::
     processed image
 
 */
+
+// including required libraries
 #include<cuda_runtime.h>
 #include<iostream>
 #include<stdio.h>
@@ -41,79 +43,78 @@ Operation::
 #include<pybind11/numpy.h>
 #include<pybind11/stl.h>
 
-#define block_dim 16                                                                                                                                                                        // Dimension of each cuda block. Each block contains 256 threads representing a pixel each
-#define block_size 256  
+#define block_dim 16                                                                    // dimension of kernel block size                                                                                                                                                      // Dimension of each cuda block. Each block contains 256 threads representing a pixel each
+#define block_size 256                                                                  // total no of threads in a block
 
-// size of each block  
 namespace py = pybind11;
 
-__constant__ float D_MAT[9];
-__constant__ float D_BLC_Offset[4];
-__constant__ float D_LSC[4];
-__constant__ float D_EDGE[256];     //max kernel size = 16 
-__constant__ float D_hue[4];
-__constant__ int D_width;
+__constant__ float D_MAT[9];                                                            //Matrix for kernel operations
+__constant__ float D_BLC_Offset[4];                                                     //Black level correction 
+__constant__ float D_LSC[4];                                                            //Lens shading correction values
+__constant__ float D_EDGE[256];                                                         //max kernel size = 16 
+__constant__ float D_hue[4];                                                            // Rotation matrix for hue adjustment
+__constant__ int D_width;                                                               //constant variables for image height and width
 __constant__ int D_length;
 
 
-struct configuration
+struct configuration                                                                    //Structure for pipeline configurations
 {
     
-    int     length=0;
-    int     width=0;
-    float   white_level = 65535.0f;  //assumed 16 bit precision
-    int     orientation=0;
+    int     length=0;                                                                   //Image length
+    int     width=0;                                                                    //image width
+    float   white_level = 65535.0f;                                                     //assumed 16 bit precision
+    int     orientation=0;                                                              //Image orientation
 
-    bool    DPC = false;
-    float   DPC_threshold=0;
+    bool    DPC = false;                                                                //Toogle Defective pixel correction
+    float   DPC_threshold=0;                                                            //Defective pixel correction threshold
 
-    bool    BLC = false;
-    std::vector<float> BLC_Offset;
+    bool    BLC = false;                                                                //Black level correction       
+    std::vector<float> BLC_Offset;                                                      //Offset for Black level correction
 
-    bool    LSC = false;
-    std::vector<float> LSC_gain;
-    float   LSC_Max_radius=0.0f;
+    bool    LSC = false;                                                                //toogle Lens shading correction
+    std::vector<float> LSC_gain;                                                        //Lens shading correction gain values
+    float   LSC_Max_radius=0.0f;                                                        //Radius of lens vignetting
 
-    bool    AWB = true;
-    std::vector<float> AWB_gain;
-    bool    AWB_Value_Given = false;
+    bool    AWB = true;                                                                 //toogle automatic white balance
+    std::vector<float> AWB_gain;                                                        //Automatic white balance gains user defined
+    bool    AWB_Value_Given = false;                                                    //toogle AWB if user defined
 
-    std::vector<float> CCM_gain;
-    bool    CCM=false;
+    std::vector<float> CCM_gain;                                                        //Color correction matix
+    bool    CCM=false;                                                                  //toogle Color correction matix
 
-    bool    Color_Space_Conversion = false;
-    bool    Brightness = false;
-    float   Brightness_value = 1.0f;
-    bool    Saturation = false;
-    float   Saturation_value = 1.0f;
-    bool    Hue = false;
-    float   Hue_value = 0.0f;   //in radians from 0 to 2pi (360 degrees)
-    bool    Contrast = false;
-    float   Contrast_value = 1.0f;
-    bool    Tint = false;
-    float   Tint_value = 1.0f;
-    bool    Vibrance = false;
-    float   Vibrance_value = 1.0f;
+    bool    Color_Space_Conversion = false;                                             //toogle color space conversion. this deactivates entire tonal adjustments and filters
+    bool    Brightness = false;                                                         //toogle brightness
+    float   Brightness_value = 1.0f;                                                    //scale for brightness
+    bool    Saturation = false;                                                         //toogle Saturation
+    float   Saturation_value = 1.0f;                                                    //value for saturation
+    bool    Hue = false;                                                                //toogle hue
+    float   Hue_value = 0.0f;                                                           //in radians from 0 to 2pi (360 degrees)
+    bool    Contrast = false;                                                           //toogle contrast
+    float   Contrast_value = 1.0f;                                                      //value for contrast
+    bool    Tint = false;                                                               //toogle tint
+    float   Tint_value = 1.0f;                                                          //value for tint
+    bool    Vibrance = false;                                                           //toogle vibrance
+    float   Vibrance_value = 1.0f;                                                      //value for vibrance
 
-    bool    Bilateral_Filter = false;
-    int     Bilateral_kernel_size = 3;
-    float   Bilateral_Domain_STD = 10.0f;
-    float   Bilateral_Range_STD = 10.0f;
+    bool    Bilateral_Filter = false;                                                   //toogle bilateral filter
+    int     Bilateral_kernel_size = 3;                                                  //filter kernel size
+    float   Bilateral_Domain_STD = 10.0f;                                               // Domain standard deviation
+    float   Bilateral_Range_STD = 10.0f;                                                // Range standard deviation
 
-    bool    Edge_enhancement = false;
-    float   Edge_enhancement_A_Value = 0.0f;
-    int     Edge_enhancement_kernel_size = 3;
-    float   Edge_enhancement_STD = 1;
+    bool    Edge_enhancement = false;                                                   // Toogle highboost filter
+    float   Edge_enhancement_A_Value = 0.0f;                                            // high boost scaling factor
+    int     Edge_enhancement_kernel_size = 3;                                           // kernel size
+    float   Edge_enhancement_STD = 1;                                                   // edge enhancement standard deviation
 
-    bool    GAMMA=true;
-    float   GAMMA_VALUE = 2.2f;
+    bool    GAMMA=true;                                                                 //Toogle gamma
+    float   GAMMA_VALUE = 2.2f;                                                         // value for gamma correction
 
     
 };
 
 
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
-__global__ void DP_kernel(float* Image , float* image_out, float threshold)                                                                                                // Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
+__global__ void DP_kernel(float* Image , float* image_out, float threshold)             // Defective pixel correction Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
 {
 
     // directional gradient calculation
@@ -179,7 +180,6 @@ __global__ void DP_kernel(float* Image , float* image_out, float threshold)     
 /* this program is an execution of Black Level correction on digital bayer domain images*/
 __global__ void BLC_kernel(float* Image)
 {
-
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
     int idx= (y)* D_width  + (x);
     if(y<D_length && x<D_width)
@@ -196,10 +196,10 @@ __global__ void BLC_kernel(float* Image)
 }
 
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
-__global__ void LSC_kernel(float* Image ,  float Max_radius)                                                                                                            // gain is for every color in bayer format image assed in the input configuration. 
+__global__ void LSC_kernel(float* Image ,  float Max_radius)                                                            // gain is for every color in bayer format image assed in the input configuration.(will be upgraded to warp level reduction kernel) 
 {
-
-    // Lens Shading Correction calculation
+    /* D_LSC - gain for each of g1,g2,r,b pixels in order of bayer pattern, Max_radius - maximum radius for LSC calculation
+    */
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y; 
     if(y<D_length && x<D_width) //boundary check
     {
@@ -219,22 +219,22 @@ __global__ void LSC_kernel(float* Image ,  float Max_radius)                    
 }
 
 /* this program is an calculation of automatic white balance gain on digital bayer domain images*/
-__global__ void AWBG_kernel(float* Image , double* awbg,int orientation)                                                                                    // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||             || awbg- || 0-> green || 1-> blue || 2-> red  ||
+__global__ void AWBG_kernel(float* Image , double* awbg,int orientation)                                                // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||
 {
-    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;                                                                                                   // calculating the pixel coordinates y and x corresponding to the thread.
-                                                                                                                                                           
-    __shared__ double Green_sum[block_size], Red_sum[block_size], Blue_sum[block_size];                                                                                      // Shared memory initialization for each channel   int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;  
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;                                                                   // calculating the pixel coordinates y and x corresponding to the thread.
+
+    __shared__ double Green_sum[block_size], Red_sum[block_size], Blue_sum[block_size];                                                                     // Shared memory initialization for each channel   int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;  
 
     int threadid = threadIdx.y*blockDim.x + threadIdx.x;
 
-    Green_sum[threadid]  = 0; 
-    Red_sum[threadid]  = 0; 
-    Blue_sum[threadid]  = 0; 
+    Green_sum[threadid]  = 0;                                                                                                                               //color_sum corresponds to variable to store the sum of each color pixels. 
+    Blue_sum[threadid]  = 0;                                                                                                                                //One can assume an overflow issue but for a double to overflow with a 16 bit precision it will take 
+    Red_sum[threadid]  = 0;                                                                                                                                 // all the memory ever produced and will produce to store such an image.
 
     if(y<D_length && x<D_width)
     {
-        int idx= (y)* D_width  + (x);                                                                                                                                                     // Idx is the index of the pixel in the flattened array. 
-        if(y&1 && x&1)
+    int idx= (y)* D_width  + (x);                                                                                                                           // Idx is the index of the pixel in the flattened array. 
+    if(y&1 && x&1)
             {
                 if(orientation ==1 || orientation ==2)
                 {
@@ -320,9 +320,12 @@ __global__ void AWBG_kernel(float* Image , double* awbg,int orientation)        
         atomicAdd(&awbg[2],Red_sum[0]);
 
     }
+    /*In this program each thread identifies and stores a pixel in one of the three colors. then using parallel reduction technique
+        accumulates them locally in the block. the thread with id 0 adds the values to the global sum.
+    */
 }
 
-__global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float gain_b, int orientation)                                                 // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||             || awbg- || 0-> green || 1-> blue || 2-> red  ||
+__global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float gain_b, int orientation)                // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||    
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
     int idx= (y)* D_width  + (x);
@@ -392,18 +395,20 @@ __global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float 
                 }
             }
     }
+    /* Kernel for gain application.
+    */
 
 }
 
 /* this program is an execution of edge aware interpolation of bayer domain image*/
-__global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation)                                       //green interpolation
+__global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation)                                         //green interpolation (this is a trial to test if cooperative loading using shared memory or using threads for each halo is faster. the kernel will be replaced with most efficient one after profiling. )
 {
-    int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
+    int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
     int idx= abs(y-=2)* D_width  + abs(x-=2);
 
-    __shared__ float buffer[20][21];   // in format [y][x]
+    __shared__ float buffer[20][21];                                                                                    // in format [y][x]
 
-    int tx=threadIdx.x, ty=threadIdx.y;  // thread x and thread y
+    int tx=threadIdx.x, ty=threadIdx.y;                                                                                 // thread x and thread y
     buffer[ty][tx] =0;
     if(y<D_length && x<D_width)
     {
@@ -490,7 +495,7 @@ __global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation) 
     }
 }
 
-__global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int orientation)                   //color interpolation
+__global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int orientation)                 //color interpolation
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
     int idx= abs(y-=2)* D_width  + abs(x-=2);

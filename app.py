@@ -27,6 +27,7 @@ class ISPPipelineUI(tb.Window):
         self.title("CUDA ISP Pipeline Profiler")
         self.geometry("1200x750")
         self.raw_input_img = []
+        self.count = 0
 
         self.orientation_list = {
             "BGGR" : 0, 
@@ -43,7 +44,7 @@ class ISPPipelineUI(tb.Window):
         tb.Label(self.main_frame, text="Path:").pack(fill=X, pady=(10, 0))
         self.path_input = tb.Entry(self.main_frame)
         self.path_input.insert(0, r"Sample_input\test.dng")
-        self.path_input.pack(fill=X, pady=(0, 20))
+        self.path_input.pack(fill=X,padx = (0,130), pady=(0, 20))
         self.path_input.bind("<Return>", lambda event: self.Load_image(self.path_input.get()))
 
         # --- Left Panel: Scrollable Controls ---
@@ -158,6 +159,23 @@ class ISPPipelineUI(tb.Window):
         )
         self.vibrance_cb.pack(fill=X, padx=20, pady=5)
 
+        #Bilateral Filter
+        self.Bilateral_Filter_toogle = tb.BooleanVar(value=False)
+        self.Bilateral_Filter = tb.Checkbutton(
+            self.control_panel, text="Bilateral Filter", 
+            variable=self.Bilateral_Filter_toogle, bootstyle="round-toggle", state=DISABLED
+        )
+        self.Bilateral_Filter.pack(fill=X, padx=20, pady=5)
+
+        #High Boost Filter
+        self.Edge_enhancement_toogle = tb.BooleanVar(value=False)
+        self.Edge_enhancement = tb.Checkbutton(
+            self.control_panel, text="Edge enhancement", 
+            variable=self.Edge_enhancement_toogle, bootstyle="round-toggle", state=DISABLED
+        )
+        self.Edge_enhancement.pack(fill=X, padx=20, pady=5)
+
+
         # Gamma Correction
         self.gamma_var_toogle = tb.BooleanVar(value=True)
         self.gamma_cb = tb.Checkbutton(
@@ -166,21 +184,8 @@ class ISPPipelineUI(tb.Window):
         )
         self.gamma_cb.pack(fill=X, pady=10)
 
-        #Bilateral Filter
-        self.Bilateral_Filter_toogle = tb.BooleanVar(value=True)
-        self.Bilateral_Filter = tb.Checkbutton(
-            self.control_panel, text="Bilateral Filter", 
-            variable=self.Bilateral_Filter_toogle, bootstyle="round-toggle"
-        )
-        self.Bilateral_Filter.pack(fill=X, pady=10)
 
-        #High Boost Filter
-        self.Edge_enhancement_toogle = tb.BooleanVar(value=True)
-        self.Edge_enhancement = tb.Checkbutton(
-            self.control_panel, text="Edge enhancement", 
-            variable=self.Edge_enhancement_toogle, bootstyle="round-toggle"
-        )
-        self.Edge_enhancement.pack(fill=X, pady=10)
+        
 
         # --- Entry Controls Area ---
         tb.Separator(self.control_panel, bootstyle="secondary").pack(fill=X, pady=15)
@@ -367,7 +372,7 @@ class ISPPipelineUI(tb.Window):
 
     def csc_master_callback(self):
         self.update_sub_toggles()
-        self.run_pipeline()
+        #self.run_pipeline()
 
     def update_sub_toggles(self):
         if self.csc_var_toogle.get():
@@ -377,6 +382,8 @@ class ISPPipelineUI(tb.Window):
             self.contrast_cb.configure(state=NORMAL)
             self.tint_cb.configure(state=NORMAL)
             self.vibrance_cb.configure(state=NORMAL)
+            self.Bilateral_Filter.configure(state=NORMAL)
+            self.Edge_enhancement.configure(state=NORMAL)
         else:
             self.brightness_cb.configure(state=DISABLED)
             self.saturation_cb.configure(state=DISABLED)
@@ -384,20 +391,16 @@ class ISPPipelineUI(tb.Window):
             self.contrast_cb.configure(state=DISABLED)
             self.tint_cb.configure(state=DISABLED)
             self.vibrance_cb.configure(state=DISABLED)
-            
+            self.Bilateral_Filter.configure(state=DISABLED)
+            self.Edge_enhancement.configure(state=DISABLED)
 
-            self.brightness_var.set(False)
-            self.saturation_var.set(False)
-            self.hue_var.set(False)
-            self.contrast_var.set(False)
-            self.tint_var.set(False)
-            self.vibrance_var.set(False)
+            
 
     def run_pipeline(self):
         if len(self.raw_input_img) == 0:
             return
         R,G,B = ISP.ISP(self.raw_input_img, cfg)
-
+        self.log_data("image processed")
         R = np.reshape(R, (cfg.length, cfg.width))
         G = np.reshape(G, (cfg.length, cfg.width))
         B = np.reshape(B, (cfg.length, cfg.width))
@@ -539,10 +542,11 @@ class ISPPipelineUI(tb.Window):
         if not hasattr(self, 'current_cv_img'):
             self.log_data(" Image not loaded")
             return
-
-        cv2.imwrite("output.jpg", cv2.cvtColor(self.current_cv_img,cv2.COLOR_BGR2RGB))
-        self.log_data(" Image saved")
         
+        cv2.imwrite(f"output_{self.count}.jpg", cv2.cvtColor(self.current_cv_img,cv2.COLOR_BGR2RGB))
+        self.log_data(" Image saved")
+        self.count += 1
+
 
 if __name__ == "__main__":
     app = ISPPipelineUI()
