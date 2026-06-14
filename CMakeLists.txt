@@ -6,6 +6,7 @@ project(CudaMatrixAdd LANGUAGES CXX CUDA)
 # 2. Set the C++ standard (pybind11 requires at least C++11, but 14 or 17 is better)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -lineinfo")
 
 # 3. Find pybind11
 # This assumes you have pybind11 installed via pip or your package manager
@@ -21,7 +22,7 @@ set(MODULE_NAME ISP)
 
 # 5. Create the library
 # pybind11_add_module handles the special flags needed for Python extensions
-pybind11_add_module(${MODULE_NAME} ISP.cu)
+pybind11_add_module(${MODULE_NAME} ISP-2.cu)
 
 # 6. Configure CUDA Architectures
 # This tells NVCC which GPU generation to compile for. 

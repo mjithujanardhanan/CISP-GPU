@@ -5,7 +5,7 @@ import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledFrame
 from PIL import Image, ImageTk
-from wrappers import ISP
+from wrapper2 import ISP
 from pathlib import Path as Pt
 import rawpy
 

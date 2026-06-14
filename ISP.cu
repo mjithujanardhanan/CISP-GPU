@@ -845,26 +845,29 @@ __global__ void Bilateral_filter_kernel(float* channel_0,float* channel_1,float*
             int x0 = reflect_padding((x - padding) + m * block_dim , D_width );
             int y0 = reflect_padding((y - padding) + l * block_dim , D_length );
 
-            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_0[y0 * D_width + x0];
-            buffer[shared_vol + (ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_1[y0 * D_width + x0];
-            buffer[2 * shared_vol + (ty + l * block_dim) * shared_size + (tx + m * block_dim)] = channel_2[y0 * D_width + x0];
+            int sid = ((ty + l * block_dim) * shared_size + (tx + m * block_dim)) * 3;
+
+            buffer[sid] = channel_0[y0 * D_width + x0];
+            buffer[sid + 1] = channel_1[y0 * D_width + x0];
+            buffer[sid + 2] = channel_2[y0 * D_width + x0];
 
         }
 
     __syncthreads();
     if(y<D_length && x<D_width)
     {
-        float central_pixel = buffer[ty0 * shared_size + tx0];
+        float central_pixel = buffer[(ty0 * shared_size + tx0)*3];
         float norm_sum = 0.0f, kernel_sum_0 = 0.0f, kernel_sum_1 = 0.0f, kernel_sum_2 = 0.0f;
         float spatial_pdt = 1.0f / (2.0f *spatial_variance*spatial_variance);
         float range_pdt = 1.0f / (2.0f *range_variance * range_variance);
         for(int i=-padding; i <= padding; i++)
             for(int j=-padding; j <= padding; j++)
             {
+                int tsid = ((ty0 + i) * shared_size +(tx0+j))* 3;
 
-                float neighbor_pixel_0 = buffer[(ty0 + i) * shared_size +(tx0+j)],temp;
-                float neighbor_pixel_1 = buffer[ shared_vol + (ty0 + i) * shared_size +(tx0+j)];
-                float neighbor_pixel_2 = buffer[ 2*  shared_vol +(ty0 + i) * shared_size +(tx0+j)];
+                float neighbor_pixel_0 = buffer[ tsid],temp;
+                float neighbor_pixel_1 = buffer[ tsid +  1];
+                float neighbor_pixel_2 = buffer[ tsid  + 2];
 
                 float diff = central_pixel - neighbor_pixel_0;
                 temp = __expf( -(( i*i + j*j )*(spatial_pdt) + ((diff )*(diff) )* (range_pdt)));

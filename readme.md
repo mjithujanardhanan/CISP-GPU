@@ -15,11 +15,23 @@ A High-Performance GPU-accelerated Cuda based Image Signal Processor(ISP) that t
 # ISP Operations Integrated
 
 ## Bayer Domain
-* Defective pixel correction
-* Lens Shading Correction
-* Black Level Correction
-* Automatic White Balance Gain Adjustment (Gray world assumption)
-* De-Mosaicing
+The raw output from the sensor of a camera is typically a 2d array of intensity values proportional to the amount of light captured by each pixel. This values are arranged in a pattern of red, green and blue colors called Bayer array. Green makes up 50% of the values as it is used as a luminance substitute( Human visual system is more sensitive to green).
+### Defective pixel correction
+Image sensors might have defective pixels in them (either always high, low or fixed). Defective pixel correction is technique used to remove such pixels from the output sensor values. The algorithm calculates average difference for a pixel to its neighbors and if that difference exceeds a threshold the pixel is replaced with an interpoolation among its neighbors.
+
+
+### Lens Shading Correction
+The light falling on the senosr through the lens is not uniform everywhere. it tends to have a peak at the centre and decreases to the edges. This effect is called vignetting. Lens shading correction is an algorithm aiming to correct the effect.
+
+### Black Level Correction
+Black level also called dark current is the minimum value a sensor can record even when no light is allowed to pass. The dark is caused by a lot of factors, the thermal energy generates electrons inside the sensor and exites the pixels is one. The black level is subracted from the image to get the actual pixels values.
+
+### Automatic White Balance Gain Adjustment (Gray world assumption)
+Due to different sources of illumination whites in an image might not true white. To correct this irregularity automatic white balance is done. Gray world assumes that the average value of the image is gray and adapts red and blue channels using a gain.
+
+### De-Mosaicing
+The bayer domain images are not fit for human viewing. The process of generating 3-channel RGB images from bayer image is called De-Mosaicing. The algorithm used here is called hamilton adams - edge aware interpolation. This algorithm calculates directional gradients and choses the path with least change. The edge aware algorithm ensures continuity and reduces the interpolation artifacts. 
+
 ## RGB Domain
 * Color Correction Matrix 
 * Color Space Conversion to YCbCr
