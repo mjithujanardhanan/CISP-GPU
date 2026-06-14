@@ -15,7 +15,8 @@ RAW_EXTS = {
     ".dng", ".nef", ".nrw",
     ".cr2", ".cr3", ".crw",
     ".arw", ".raf", ".orf",
-    ".rw2", ".pef", ".CR2"
+    ".rw2", ".pef", ".CR2",
+    ".RAW"
 }
 
 cfg = ISP.Configuration()
@@ -223,6 +224,13 @@ class ISPPipelineUI(tb.Window):
 
         # --- Entry Controls Area ---
         tb.Separator(self.control_panel, bootstyle="secondary").pack(fill=X, pady=15)
+
+        # Float Input
+        tb.Label(self.control_panel, text="White Level:").pack(fill=X, pady=(10, 0))
+        self.WL_var = tb.DoubleVar(value=0.5)
+        self.WL_input = tb.Entry(self.control_panel, textvariable=self.WL_var)
+        self.WL_input.pack(fill=X, padx=(0,20), pady=(0, 10))
+        self.WL_input.bind("<Return>") 
         
         # Slider
         tb.Label(self.control_panel, text="Defective Pixel Limit (0- 255 ):").pack(fill=X, pady=(10, 0))
@@ -511,6 +519,7 @@ class ISPPipelineUI(tb.Window):
             with rawpy.imread(Path) as raw:
                 loaded_img = np.array(raw.raw_image_visible.copy())
                 cfg.white_level = raw.white_level
+                self.WL_var.set(cfg.white_level)
         else:
             self.log_data(f"Error: Could not load image. Unsupported format")
             return
@@ -548,6 +557,9 @@ class ISPPipelineUI(tb.Window):
         self.run_pipeline()
 
     def Initialize_parameters(self):
+
+
+        cfg.white_level = self.WL_var.get()
 
         cfg.orientation = self.orientation_list[self.orientation_var.get()]
 
