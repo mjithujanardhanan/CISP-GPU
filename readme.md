@@ -90,6 +90,9 @@ The isp.cu and isp-2.cu are 2 different implementation of the same pipeline. isp
 
 # How To Use
 
+A video demonstration of the repository is uploaded online. access through this link :: https://youtu.be/R_uROm2E-l8?si=l8i2KtWSejb-nH7R
+
+
 clone repository : 
 ```bash
 git clone https://github.com/mjithujanardhanan/CISP---Cuda-ISP-Pipeline.git

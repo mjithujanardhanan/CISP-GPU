@@ -11,6 +11,8 @@ import rawpy
 import cupy as cp
 import time
 
+cp.cuda.Device(0).use()
+
 RAW_EXTS = {
     ".dng", ".nef", ".nrw",
     ".cr2", ".cr3", ".crw",
