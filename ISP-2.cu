@@ -78,6 +78,8 @@ struct configuration                                                            
     float   LSC_Max_radius=0.0f;                                                        //Radius of lens vignetting
 
     bool    AWB = true;                                                                 //toogle automatic white balance
+    bool    Exposure = false;                                                           //toogle exposure compensation
+    float   Exposure_value = 0.0f;                                                      //Exposure compensation value
     std::vector<float> AWB_gain;                                                        //Automatic white balance gains user defined
     bool    AWB_Value_Given = false;                                                    //toogle AWB if user defined
 
@@ -341,7 +343,7 @@ __global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float 
             {
                 if(orientation ==1 || orientation ==2)
                 {
-                    Image[idx] = Image[idx] * gain_g;
+                    Image[idx] = Image[idx] * gain_g ;
                 }
                 else if(orientation ==0)
                 {
@@ -403,6 +405,82 @@ __global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float 
     */
 
 }
+
+__global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float gain_b, float Egain, int orientation)                // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||    
+{
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+    int idx= (y)* D_width  + (x);
+
+
+    if(y<D_length && x<D_width)
+    {
+            if(y&1 && x&1)
+            {
+                if(orientation ==1 || orientation ==2)
+                {
+                    Image[idx] = Image[idx] * gain_g * Egain;
+                }
+                else if(orientation ==0)
+                {
+                    Image[idx] = Image[idx] * gain_r* Egain;
+                }
+                else
+                {
+                    Image[idx] = Image[idx] * gain_b* Egain;
+                }
+            }
+            else if(!(y&1) && !(x&1))
+            {
+                if(orientation ==1 || orientation ==2)
+                {
+                    Image[idx] = Image[idx] * gain_g* Egain;
+                }
+                else if(orientation ==0)
+                {
+                    Image[idx] = Image[idx] * gain_b* Egain;
+                }
+                else
+                {
+                    Image[idx] = Image[idx] * gain_r* Egain;
+                }
+            }
+        
+            else if((y&1) && !(x&1))
+            {
+                if(orientation ==0 || orientation ==3)
+                {
+                    Image[idx] = Image[idx] * gain_g* Egain;
+                }
+                else if(orientation ==1)
+                {
+                    Image[idx] = Image[idx] * gain_b* Egain;
+                }
+                else
+                {
+                    Image[idx] = Image[idx] * gain_r* Egain;
+                }
+            }
+            else 
+            {
+                if(orientation ==0 || orientation ==3)
+                {
+                    Image[idx] = Image[idx] * gain_g* Egain;
+                }
+                else if(orientation ==1)
+                {
+                    Image[idx] = Image[idx] * gain_r* Egain;
+                }
+                else
+                {
+                    Image[idx] = Image[idx] * gain_b* Egain;
+                }
+            }
+    }
+    /* Kernel for gain application.
+    */
+
+}
+
 
 /* this program is an execution of edge aware interpolation of bayer domain image*/
 __global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation)                                         //green interpolation (this is a trial to test if cooperative loading using shared memory or using threads for each halo is faster. the kernel will be replaced with most efficient one after profiling. )
@@ -733,7 +811,7 @@ __global__ void Color_control_kernel( float* channel_1, float* channel_2, float*
         float c1 = channel_1[idx], c2 = channel_2[idx], c3 = channel_3[idx];
         if(brightness)
         {
-            c1 = (c1 * bvalue);
+            c1 += bvalue;
         }
         if(saturation)
         {
@@ -1101,9 +1179,17 @@ void ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t bu
             GAIN_GREEN = cfg.AWB_gain[1];
             GAIN_BLUE = cfg.AWB_gain[2];
         }
-        AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, cfg.orientation);
-        //cudaDeviceSynchronize();
-        
+
+        if(cfg.Exposure)
+        {
+            float compensation = pow(2.0f, cfg.Exposure_value);
+            AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE,compensation, cfg.orientation);
+            //cudaDeviceSynchronize();
+        }
+        else 
+        {
+            AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, cfg.orientation);
+        }
     }
 
 
@@ -1494,6 +1580,8 @@ PYBIND11_MODULE(ISP, m) {
         .def_readwrite("Edge_enhancement_STD", &configuration::Edge_enhancement_STD)
         .def_readwrite("Gaussian_blur", &configuration::Gaussian_blur)
         .def_readwrite("Gaussian_STD", &configuration::Gaussian_STD)
+        .def_readwrite("Exposure", &configuration::Exposure)
+        .def_readwrite("Exposure_value", &configuration::Exposure_value)
         .def_readwrite("Gaussian_blur_kernel_size", &configuration::Gaussian_blur_kernel_size)
         .def_readwrite("Joint_bilateral_kernel", &configuration::Joint_bilateral_kernel);
 

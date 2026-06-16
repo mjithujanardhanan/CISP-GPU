@@ -34,6 +34,8 @@ class ISPPipelineUI(tb.Window):
         self.raw_input_img = []
         self.count = 0
         self.arr_length =0
+        self.white_balance = None
+        self.black_level = None
 
         self.buf_1 = None
         self.buf_2 = None
@@ -115,9 +117,26 @@ class ISPPipelineUI(tb.Window):
         self.awb_var_toogle = tb.BooleanVar(value=True)
         self.awb_cb = tb.Checkbutton(
             self.control_panel, text="Automatic White Balance", 
-            variable=self.awb_var_toogle, bootstyle="round-toggle"
+            variable=self.awb_var_toogle, bootstyle="round-toggle",
+            command=self.AWB_master_callback
         )
         self.awb_cb.pack(fill=X, pady=10)
+
+        # Automatic White Balance - User defined
+        self.awb_ud_var_toogle = tb.BooleanVar(value=False)
+        self.awb_ud_cb = tb.Checkbutton(
+            self.control_panel, text="User Defined", variable=self.awb_ud_var_toogle, 
+            bootstyle="round-toggle", state=NORMAL
+        )
+        self.awb_ud_cb.pack(fill=X, padx=20, pady=5)
+
+        # Exposure Compensation
+        self.exp_var_toogle = tb.BooleanVar(value=True)
+        self.exp_cb = tb.Checkbutton(
+            self.control_panel, text="Exposure Compensation", 
+            variable=self.exp_var_toogle, bootstyle="round-toggle"
+        )
+        self.exp_cb.pack(fill=X, pady=10)
 
         # Color Correction Matrix
         self.ccm_var_toogle = tb.BooleanVar(value=True)
@@ -265,6 +284,21 @@ class ISPPipelineUI(tb.Window):
         self.lsc_radius_input.pack(fill=X,padx=(0,20), pady=(0, 10))
         self.lsc_radius_input.bind("<Return>") 
 
+        # --- Array Input: AWB gains ---
+        tb.Label(self.control_panel, text=" White Balance Gains : ").pack(fill=X, pady=(10, 0))
+        
+        self.awb_gain_var = tb.StringVar(value=" 0.0 , 0.0, 0.0 ")
+        self.awb_gain_input = tb.Entry(self.control_panel, textvariable=self.awb_gain_var)
+        self.awb_gain_input.pack(fill=X,padx=(0,20), pady=(0, 10))
+        self.awb_gain_input.bind("<Return>")
+
+        # Exposure Compensation
+        tb.Label(self.control_panel, text="Exposure compensation (Float):").pack(fill=X, pady=(10, 0))
+        self.Exp_comp_var = tb.DoubleVar(value=0.5)
+        self.Exp_comp_input = tb.Entry(self.control_panel, textvariable=self.Exp_comp_var)
+        self.Exp_comp_input.pack(fill=X, padx=(0,20), pady=(0, 10))
+        self.Exp_comp_input.bind("<Return>") 
+
         # --- Array Input: ccm  ---
         tb.Label(self.control_panel, text="Color Correction Matrix:").pack(fill=X, pady=(10, 0))
         
@@ -276,7 +310,7 @@ class ISPPipelineUI(tb.Window):
         # Slider - brightness
         tb.Label(self.control_panel, text="Brightness:").pack(fill=X, pady=(10, 0))
         self.brightness_slider = tb.Scale(
-            self.control_panel, from_=1.0, to=3.0, bootstyle=INFO
+            self.control_panel, from_=0.0, to=255.0, bootstyle=INFO
         )
         self.brightness_slider.set(0)
         self.brightness_slider.pack(fill=X, padx=(0,20), pady=(0, 10))
@@ -358,6 +392,7 @@ class ISPPipelineUI(tb.Window):
         self.EGain_input.pack(fill=X, padx=(0,20), pady=(0, 10))
         self.EGain_input.bind("<Return>") 
 
+
         # Integer Input
         tb.Label(self.control_panel, text="Edge Enhancement Kernel Size (Int):").pack(fill=X, pady=(10, 0))
         self.Edge_kernel_var = tb.IntVar(value=3)
@@ -437,6 +472,12 @@ class ISPPipelineUI(tb.Window):
     def csc_master_callback(self):
         self.update_sub_toggles()
         #self.run_pipeline()
+
+    def AWB_master_callback(self):
+        if self.awb_var_toogle.get():
+            self.awb_ud_cb.configure(state=NORMAL)
+        else:
+            self.awb_ud_cb.configure(state=DISABLED)
 
     def update_sub_toggles(self):
         if self.csc_var_toogle.get():
@@ -522,6 +563,9 @@ class ISPPipelineUI(tb.Window):
                 loaded_img = np.array(raw.raw_image_visible.copy())
                 cfg.white_level = raw.white_level
                 self.WL_var.set(cfg.white_level)
+                self.awb_gain_var.set( ", ".join(map(str, raw.camera_whitebalance[0:3])))
+                self.blc_offset_var.set(", ".join(map(str, raw.black_level_per_channel)))
+                self.color_correction_var.set(", ".join(map(str, raw.color_matrix[:,:3].flatten())))
         else:
             self.log_data(f"Error: Could not load image. Unsupported format")
             return
@@ -529,7 +573,6 @@ class ISPPipelineUI(tb.Window):
         self.log_data("initializing data")
         cfg.width = loaded_img.shape[1]
         cfg.length = loaded_img.shape[0]
-
         self.arr_length = cfg.length * cfg.width
         
         self.buf_1 = cp.empty( self.arr_length , dtype = cp.float32)
@@ -586,8 +629,16 @@ class ISPPipelineUI(tb.Window):
         cfg.LSC_Max_radius = self.lsc_radius_var.get()
 
         cfg.AWB = self.awb_var_toogle.get()
-        cfg.AWB_Value_Given = False
-        cfg.AWB_gain = [1.8530800342559814, 0.9290269613265991, 1.3925764560699463]
+        cfg.AWB_Value_Given = self.awb_ud_var_toogle.get()
+        awb_str = self.awb_gain_var.get()
+        awb_list = [float(val.strip()) for val in awb_str.split(',')]
+        if len(awb_list ) != 3  and cfg.AWB_Value_Given:
+                self.log_data("Error: White balance requires exactly 4 values.")
+                return
+        cfg.AWB_gain = awb_list
+
+        cfg.Exposure = self.exp_var_toogle.get()
+        cfg.Exposure_value = self.Exp_comp_var.get()
 
         cfg.CCM = self.ccm_var_toogle.get()
         color_correction_str = self.color_correction_var.get()
@@ -601,8 +652,8 @@ class ISPPipelineUI(tb.Window):
 
 
         cfg.Brightness = self.brightness_var_toogle.get()
-        cfg.Brightness_value = self.brightness_slider.get()
-
+        cfg.Brightness_value = (self.brightness_slider.get() / 255.0) * cfg.white_level
+ 
         cfg.Saturation = self.saturation_var_toogle.get()
         cfg.Saturation_value = self.Saturation_slider.get()
 
@@ -621,8 +672,9 @@ class ISPPipelineUI(tb.Window):
 
         cfg.Bilateral_Filter = self.Bilateral_Filter_toogle.get()
         cfg.Joint_bilateral_kernel = self.Joint_Bilateral_toogle.get()
-        cfg.Bilateral_spatial_STD = self.DSTD_var.get()
+        cfg.Bilateral_spatial_STD = (self.DSTD_var.get()/255.0)* cfg.white_level
         cfg.Bilateral_Range_STD = self.RSTD_var.get()
+
         cfg.Bilateral_kernel_size = self.Bilateral_kernel_var.get()
         if cfg.Bilateral_kernel_size > 15:
             cfg.Bilateral_kernel_size = 15
@@ -669,7 +721,7 @@ class ISPPipelineUI(tb.Window):
             self.log_data(" Image not loaded")
             return
         
-        cv2.imwrite(f"output_{self.count}.jpg", cv2.cvtColor(self.current_cv_img,cv2.COLOR_BGR2RGB))
+        cv2.imwrite(f"output_{self.count}.png", cv2.cvtColor(self.current_cv_img,cv2.COLOR_BGR2RGB))
         self.log_data(" Image saved")
         self.count += 1
 
