@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import tkinter as tk  
 import ttkbootstrap as tb
+import exiftool
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledFrame
 from PIL import Image, ImageTk
@@ -12,6 +13,8 @@ import cupy as cp
 import time
 
 cp.cuda.Device(0).use()
+
+EXIFTOOL_PATH = r"tools\exiftool-13.59_64\exiftool.exe"
 
 RAW_EXTS = {
     ".dng", ".nef", ".nrw",
@@ -48,6 +51,10 @@ class ISPPipelineUI(tb.Window):
         self.Green = None
         self.Blue = None
 
+        self.log_windows = []
+        self.full_log_buffer = []
+        self.log_windows = []
+
 
 
 
@@ -70,6 +77,7 @@ class ISPPipelineUI(tb.Window):
         self.path_input.pack(fill=X,padx = (0,130), pady=(0, 20))
         self.path_input.bind("<Return>", lambda event: self.Load_image(self.path_input.get()))
 
+        
         # --- Left Panel: Scrollable Controls ---
         self.control_panel = ScrolledFrame(self.main_frame, width=320, autohide=True)
         self.control_panel.pack(side=LEFT, fill=Y, padx=(0, 15))
@@ -439,6 +447,14 @@ class ISPPipelineUI(tb.Window):
         self.console_frame = tb.Frame(self.image_frame)
         self.console_frame.pack(side=BOTTOM, fill=X, pady=(10, 0))
 
+        tb.Button(
+            self.console_frame,
+            text="Pop-out Logs",
+            bootstyle="secondary",
+            command=self.open_log_window
+        ).pack(anchor=NE)
+
+
         tb.Label(self.console_frame, text="Pipeline Logs:", font=("Helvetica", 10, "bold")).pack(anchor=NW)
         
         # Text widget for logs.
@@ -458,11 +474,20 @@ class ISPPipelineUI(tb.Window):
 
 
     def log_data(self, message):
-        self.console_box.configure(state=NORMAL)       
-        self.console_box.insert(END, f"{message}\n")   
-        self.console_box.see(END)                      
-        self.console_box.configure(state=DISABLED)     
+        self.full_log_buffer.append(message + '\n')
 
+        self.console_box.configure(state=NORMAL)
+        self.console_box.insert(END, f"{message }\n\n")
+        self.console_box.see(END)
+        self.console_box.configure(state=DISABLED)
+
+        # update popout logs safely
+        for win, win_text in self.log_windows[:]:
+            try:
+                win_text.insert(END, f"{message}\n")
+            except:
+                # widget destroyed → remove it
+                self.log_windows.remove((win, win_text))
     def bilateral_master_callback(self):
         if self.Bilateral_Filter_toogle.get():
             self.Joint_Bilateral.configure(state=NORMAL)
@@ -525,7 +550,56 @@ class ISPPipelineUI(tb.Window):
 
         self.current_cv_img = cur_image
         self.display_image()
+    
+    def open_log_window(self):
+        win = tb.Toplevel(self)
+        win.title("Pipeline Logs")
+        win.geometry("900x600")
 
+        search_var = tb.StringVar()
+
+        search_entry = tb.Entry(win, textvariable=search_var)
+        search_entry.pack(fill=X, padx=5, pady=5)
+
+        # ---- container frame for text + scrollbar ----
+        frame = tb.Frame(win)
+        frame.pack(fill=BOTH, expand=True)
+
+        scrollbar = tb.Scrollbar(frame, orient=VERTICAL)
+        scrollbar.pack(side=RIGHT, fill=Y)
+
+        text = tb.Text(frame, wrap=WORD, yscrollcommand=scrollbar.set)
+        text.pack(side=LEFT, fill=BOTH, expand=True)
+
+        scrollbar.config(command=text.yview)
+
+        self.log_windows.append((win, text))
+
+        def on_close():
+            self.log_windows = [(w, t) for (w, t) in self.log_windows if w != win]
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", on_close)
+
+        # ---- FULL log buffer (source of truth) ----
+        def refresh_logs(*args):
+            query = search_var.get().lower()
+
+            text.delete("1.0", END)
+
+            for msg in self.full_log_buffer:
+                if query in msg.lower():
+                    text.insert(END, msg + "\n")
+
+            text.see(END)
+            text.yview_moveto(0.0)
+
+        # initial fill
+        for msg in self.full_log_buffer:
+            text.insert(END, msg + "\n")
+
+        # bind live search
+        search_var.trace_add("write", refresh_logs)
     def display_image(self):
         if not hasattr(self, 'current_cv_img'):
             return
@@ -566,6 +640,10 @@ class ISPPipelineUI(tb.Window):
                 self.awb_gain_var.set( ", ".join(map(str, raw.camera_whitebalance[0:3])))
                 self.blc_offset_var.set(", ".join(map(str, raw.black_level_per_channel)))
                 self.color_correction_var.set(", ".join(map(str, raw.color_matrix[:,:3].flatten())))
+            with exiftool.ExifToolHelper(executable=EXIFTOOL_PATH) as et:
+                meta = et.get_metadata(Path)[0]
+            for k, v in meta.items():
+                self.log_data(str(k) + '  :::  ' + str(v) )
         else:
             self.log_data(f"Error: Could not load image. Unsupported format")
             return
