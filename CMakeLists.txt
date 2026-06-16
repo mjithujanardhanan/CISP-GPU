@@ -33,6 +33,14 @@ set_target_properties(${MODULE_NAME} PROPERTIES
     CXX_VISIBILITY_PRESET "hidden"
 )
 
+set_target_properties(${MODULE_NAME} PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY_RELEASE ${CMAKE_SOURCE_DIR}/wrappers
+    LIBRARY_OUTPUT_DIRECTORY_DEBUG ${CMAKE_SOURCE_DIR}/wrappers
+
+    RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_SOURCE_DIR}/wrappers
+    RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_SOURCE_DIR}/wrappers
+)
+
 # 7. Link CUDA libraries
 # Even though we use the driver via <cuda_runtime.h>, we need to link it
 target_link_libraries(${MODULE_NAME} PRIVATE pybind11::module)

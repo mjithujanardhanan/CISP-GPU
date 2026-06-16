@@ -76,5 +76,3 @@ cmake-build-*/
 # Generated binaries
 *.exe
 *.out
-
-build/

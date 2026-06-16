@@ -29,6 +29,9 @@ Black level also called dark current is the minimum value a sensor can record ev
 ### Automatic White Balance Gain Adjustment (Gray world assumption)
 Due to different sources of illumination whites in an image might not true white. To correct this irregularity automatic white balance is done. Gray world assumes that the average value of the image is gray and adapts red and blue channels using a gain.
 
+### Exposure compensation
+Exposure compensation is a controlled brightness scaling factor that simulates how much light the sensor would have captured if exposure had been increased or decreased.
+
 ### De-Mosaicing
 The bayer domain images are not fit for human viewing. The process of generating 3-channel RGB images from bayer image is called De-Mosaicing. The algorithm used here is called hamilton adams - edge aware interpolation. This algorithm calculates directional gradients and choses the path with least change. The edge aware algorithm ensures continuity and reduces the interpolation artifacts. 
 
@@ -84,7 +87,7 @@ The isp.cu and isp-2.cu are 2 different implementation of the same pipeline. isp
 
 # User Interface
 <p align="center">
-  <img src="images\ui.jpg" width="900">
+  <img src="images\ui.jpg" width="1500">
 </p>
 
 
@@ -97,9 +100,22 @@ clone repository :
 ```bash
 git clone https://github.com/mjithujanardhanan/CISP---Cuda-ISP-Pipeline.git
 cd CISP---Cuda-ISP-Pipeline
+
 pip install -r requirements.txt
+
+# cupy is also required got to https://pypi.org/project/cupy/ and find the version corresponsing to your cuda version and install it.
+# you can find you cuda version by executing    "NVCC --version"    in the terminal
+
+
+cmake -S . -B build
+cmake --build build --config Release
+
+python app2.py
+
 ```
-app.exe executes the ISP application
+app2.exe executes the ISP application
+
+follow Readme.txt for proper usage instructions.
 
 ### supported Formats
 
