@@ -1,0 +1,2 @@
+# Ignore bundled ExifTool source from GitHub language stats
+tools/exiftool/** linguist-vendored
