@@ -138,9 +138,18 @@ input the path to the raw image and press enter to load. The toogle button can b
 - src           :: contains individual kernels for each operation
 
 
-#Updates
+# Updates
+
+I have chosen an image from AdobeRaw dataset for bechmarking the execution speed of the pipeline. the image is present in the sample_input folder.
+
+Image characteristics:
+W*H = 3040 * 2014
+format .dng
+device NVIDIA RTX4050 Laptop gpu
+
 -19/06/2026 : current avg runtime(10000 runs) : 9.41 ms
 -20/06/2026 : Fused Lens shading correction and Black Level Correction Kernels, grouped variable to device memory transfers.  current avg runtime (10000 runs)  : 9.21 ms 
+-20/06/2026 : major optimisation Fused gamma and normalization kernel, precomputed few constants, removed floating divisions. current avg runtime (10000 runs)  : 7.3461 ms
 
 # Future work
 

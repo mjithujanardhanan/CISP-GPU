@@ -48,9 +48,12 @@ Operation::
 
 namespace py = pybind11;
 
-__constant__ float D_MAT[9];                                                            //Matrix for kernel operations
+__constant__ float D_MAT_RGB_YCbCr[9] = {0.2988, 0.5869, 0.1143, -0.1687, -0.3313, 0.5, 0.5, -0.4187, -0.0813};                                                            //Matrix for kernel operations
+__constant__ float D_MAT_YCbCr_RGB[9] = {1, -0.0006, 1.4022, 1, -0.34468, -0.7139, 1, 1.77141, 0.00007};
+__constant__ float D_MAT[9];
 // __constant__ float D_BLC_Offset[4];                                                     //Black level correction 
-// __constant__ float D_LSC[4];                                                            //Lens shading correction values
+// __constant__ float D_LSC[4];   
+__constant__ int D_LUT[256];                                                         //Lens shading correction values
 __constant__ float D_EDGE[256];                                                         //max kernel size = 16 
 __constant__ float D_hue[4];                                                            // Rotation matrix for hue adjustment
 __constant__ float D_GAUSSIAN[256];                                                     // max Gaussian Kernel size = 16
@@ -163,8 +166,6 @@ void load_data(configuration cfg)
 }
 
 
-
-
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
 __global__ void DP_kernel(float* Image , float* image_out, float threshold)             // Defective pixel correction Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
 {
@@ -252,11 +253,11 @@ __global__ void BLC_LSC_kernel(float* Image, bool BLC, bool LSC, float Max_radiu
 
 
 /* this program is an calculation of automatic white balance gain on digital bayer domain images*/
-__global__ void AWBG_kernel(float* Image , double* awbg,int orientation)                                                // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||
+__global__ void AWBG_kernel(float* Image , double* awbg, int orientation)                                                // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;                                                                   // calculating the pixel coordinates y and x corresponding to the thread.
 
-    __shared__ double Green_sum[block_size], Red_sum[block_size], Blue_sum[block_size];                                                                     // Shared memory initialization for each channel   int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;  
+    __shared__ float Green_sum[block_size], Red_sum[block_size], Blue_sum[block_size];                                                                     // Shared memory initialization for each channel   int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;  
 
     int threadid = threadIdx.y*blockDim.x + threadIdx.x;
 
@@ -760,6 +761,48 @@ __global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float*
 
 
 /* this program is for applying transform matrix to the color image*/
+__global__ void Transform_Kernel_RGB_YCbCr(float* channel_1, float* channel_2, float* channel_3)
+{
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+    
+    
+    if(y<D_length && x<D_width)
+    {
+        int idx= (y)* D_width  + (x); 
+
+        float Temp_c1 =    channel_1[idx];
+        float Temp_c2 =    channel_2[idx];
+        float Temp_c3 =    channel_3[idx];
+
+        channel_1[idx] =     (D_MAT_RGB_YCbCr[0] * Temp_c1 + D_MAT_RGB_YCbCr[1] * Temp_c2 + D_MAT_RGB_YCbCr[2] * Temp_c3);
+        channel_2[idx]=      (D_MAT_RGB_YCbCr[3] * Temp_c1 + D_MAT_RGB_YCbCr[4] * Temp_c2 + D_MAT_RGB_YCbCr[5] * Temp_c3);
+        channel_3[idx]=      (D_MAT_RGB_YCbCr[6] * Temp_c1 + D_MAT_RGB_YCbCr[7] * Temp_c2 + D_MAT_RGB_YCbCr[8] * Temp_c3);
+
+
+    }
+}
+
+__global__ void Transform_Kernel_YCbCr_RGB(float* channel_1, float* channel_2, float* channel_3)
+{
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+    
+    
+    if(y<D_length && x<D_width)
+    {
+        int idx= (y)* D_width  + (x); 
+
+        float Temp_c1 =    channel_1[idx];
+        float Temp_c2 =    channel_2[idx];
+        float Temp_c3 =    channel_3[idx];
+
+        channel_1[idx] =     (D_MAT_YCbCr_RGB[0] * Temp_c1 + D_MAT_YCbCr_RGB[1] * Temp_c2 + D_MAT_YCbCr_RGB[2] * Temp_c3);
+        channel_2[idx]=      (D_MAT_YCbCr_RGB[3] * Temp_c1 + D_MAT_YCbCr_RGB[4] * Temp_c2 + D_MAT_YCbCr_RGB[5] * Temp_c3);
+        channel_3[idx]=      (D_MAT_YCbCr_RGB[6] * Temp_c1 + D_MAT_YCbCr_RGB[7] * Temp_c2 + D_MAT_YCbCr_RGB[8] * Temp_c3);
+
+
+    }
+}
+
 __global__ void Transform_Kernel(float* channel_1, float* channel_2, float* channel_3)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
@@ -782,15 +825,48 @@ __global__ void Transform_Kernel(float* channel_1, float* channel_2, float* chan
 }
 
 /* This program is for applying Mapping using a Look Up Table(LUT) to the image on all channels*/
-__global__ void LUT_kernel( float* red, float* green, float* blue, float* LUT, float white_value)
+__global__ void LUT_kernel_Gamma( float* red, float* green, float* blue, int* rint, int* gint, int*bint, float i_white_value)
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
     int idx= (y)* D_width  + (x);  
     if(y<D_length && x<D_width)
     {
-        green[idx] = LUT[(int)roundf(fmaxf(0.0f,fminf(white_value, green[idx])))];
-        red[idx] = LUT[(int)roundf(fmaxf(0.0f,fminf(white_value, red[idx])))];
-        blue[idx] = LUT[(int)roundf(fmaxf(0.0f,fminf(white_value, blue[idx])))];
+
+        float g_pixel = green[idx];
+        float r_pixel = red[idx];
+        float b_pixel = blue[idx];
+
+        g_pixel = roundf(fmaxf(0.0f,fminf(255.0, g_pixel * i_white_value)));
+        r_pixel = roundf(fmaxf(0.0f,fminf(255.0, r_pixel * i_white_value)));
+        b_pixel = roundf(fmaxf(0.0f,fminf(255.0, b_pixel * i_white_value)));
+
+
+        gint[idx] = D_LUT[(int)g_pixel];
+        rint[idx] = D_LUT[(int)r_pixel];
+        bint[idx] = D_LUT[(int)b_pixel];
+    }
+}
+
+/* This program is for applying Mapping using a Look Up Table(LUT) to the image on all channels*/
+__global__ void LUT_kernel( float* red, float* green, float* blue, float i_white_value)
+{
+    int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
+    int idx= (y)* D_width  + (x);  
+    if(y<D_length && x<D_width)
+    {
+
+        float g_pixel = green[idx];
+        float r_pixel = red[idx];
+        float b_pixel = blue[idx];
+
+        g_pixel = roundf(fmaxf(0.0f,fminf(255.0, g_pixel * i_white_value)));
+        r_pixel = roundf(fmaxf(0.0f,fminf(255.0, r_pixel * i_white_value)));
+        b_pixel = roundf(fmaxf(0.0f,fminf(255.0, b_pixel * i_white_value)));
+
+
+        green[idx] = D_LUT[(int)g_pixel];
+        red[idx] = D_LUT[(int)r_pixel];
+        blue[idx] = D_LUT[(int)b_pixel];
     }
 }
 
@@ -857,21 +933,21 @@ __global__ void Color_control_kernel( float* channel_1, float* channel_2, float*
 }
 
 /* This program is for converting datatype of image to 8-bit integer*/
-__global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, int* gint, int*bint, float white_value)
+__global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, int* gint, int*bint, float i_white_value)
 {
     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;
     int idx= (y)* D_width  + (x);  
     if(y<D_length && x<D_width)
     {
-        gint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,green[idx]*255.0f/white_value)));
-        rint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,red[idx]  *255.0f/white_value)));
-        bint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,blue[idx] *255.0f/white_value)));
+        gint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,green[idx]*i_white_value)));
+        rint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,red[idx]  *i_white_value)));
+        bint[idx] =    (int)roundf(fmaxf(0.0f,fminf(255.0,blue[idx] *i_white_value)));
     }
 }
 
 /* this kernel performs bilateral filtering on the image*/
 
-__global__ void Bilateral_filter_kernel(float* channel_input, float* channel_output, int shared_size, int padding, float dim_variance, float range_variance)
+__global__ void Bilateral_filter_kernel(float* channel_input, float* channel_output, int shared_size, int padding, float spatial_pdt, float range_pdt)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
     int idx= (y)* D_width  + (x);  
@@ -892,14 +968,14 @@ __global__ void Bilateral_filter_kernel(float* channel_input, float* channel_out
     if(y<D_length && x<D_width)
     {
         float central_pixel = buffer[ty0 * shared_size + tx0];
-        float norm_sum = 0.0f, kernel_sum = 0.0f;
-        float dim_pdt = 1.0f / (2.0f *dim_variance*dim_variance);
-        float range_pdt = 1.0f / (2.0f *range_variance * range_variance);
+        float norm_sum = 0.0f, kernel_sum = 0.0f;        
         for(int i=-padding; i <= padding; i++)
             for(int j=-padding; j <= padding; j++)
             {
                 float neighbor_pixel = buffer[(ty0 + i) * shared_size +(tx0+j)],temp, diff = central_pixel - neighbor_pixel;
-                temp = __expf( -(( i*i + j*j )*(dim_pdt) + ((diff )*(diff) )* (range_pdt)));
+
+                temp = __expf( -(( i*i + j*j )*(spatial_pdt) + ((diff )*(diff) )* (range_pdt)));
+
                 norm_sum += temp;
                 kernel_sum += neighbor_pixel* temp;
             }
@@ -908,7 +984,7 @@ __global__ void Bilateral_filter_kernel(float* channel_input, float* channel_out
 
 }
 
-__global__ void Bilateral_filter_kernel(float* channel_0,float* channel_1,float* channel_2, float* channel_output_0, float* channel_output_1, float* channel_output_2, int shared_size,  int shared_vol, int padding, float spatial_variance, float range_variance)
+__global__ void Bilateral_filter_kernel(float* channel_0,float* channel_1,float* channel_2, float* channel_output_0, float* channel_output_1, float* channel_output_2, int shared_size,  int shared_vol, int padding, float spatial_pdt, float range_pdt)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
     int idx= (y)* D_width  + (x);  
@@ -935,8 +1011,6 @@ __global__ void Bilateral_filter_kernel(float* channel_0,float* channel_1,float*
     {
         float central_pixel = buffer[(ty0 * shared_size + tx0)*3];
         float norm_sum = 0.0f, kernel_sum_0 = 0.0f, kernel_sum_1 = 0.0f, kernel_sum_2 = 0.0f;
-        float spatial_pdt = 1.0f / (2.0f *spatial_variance*spatial_variance);
-        float range_pdt = 1.0f / (2.0f *range_variance * range_variance);
         for(int i=-padding; i <= padding; i++)
             for(int j=-padding; j <= padding; j++)
             {
@@ -960,7 +1034,6 @@ __global__ void Bilateral_filter_kernel(float* channel_0,float* channel_1,float*
     }
 
 }
-
 
 __global__ void Edge_enhancement_kernel(float* channel_input, float* channel_output, int shared_size, int padding, int kernel_size, float alpha)
 {
@@ -1039,8 +1112,23 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
 {
     
     cudaEvent_t start, stop;
+    // cudaEvent_t lap1,lap2,lap3,lap4,lap5,lap6,lap7,lap8,lap9,lap10,lap11,lap12;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
+    // cudaEventCreate(&lap1);
+    // cudaEventCreate(&lap2);
+    // cudaEventCreate(&lap3);
+    // cudaEventCreate(&lap4);
+    // cudaEventCreate(&lap5);
+    // cudaEventCreate(&lap6);
+    // cudaEventCreate(&lap7);
+    // cudaEventCreate(&lap8);
+    // cudaEventCreate(&lap9);
+    // cudaEventCreate(&lap10);
+    // cudaEventCreate(&lap11);
+    // cudaEventCreate(&lap12);
+    float ms;
+    
 
     cudaEventRecord(start);
 
@@ -1091,6 +1179,10 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     // Executing Dead Pixel Correction Kernel
     //
     ////////////////////////////////////////////////////
+    // cudaEventRecord(lap1);
+    // cudaEventSynchronize(lap1);
+    // cudaEventElapsedTime(&ms, start, lap1);
+    // printf("Pipeline GPU time initialization: %.3f ms\n", ms);
     
     if(cfg.DPC)
     {
@@ -1103,6 +1195,11 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     }
 
 
+
+    // cudaEventRecord(lap2);
+    // cudaEventSynchronize(lap2);
+    // cudaEventElapsedTime(&ms, lap1, lap2);
+    // printf("Pipeline GPU time Defective Pixel Correction: %.3f ms\n", ms);
 
     ////////////////////////////////////////////////////
     //
@@ -1118,6 +1215,12 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
         //cudaDeviceSynchronize();
     }
 
+
+
+    // cudaEventRecord(lap3);
+    // cudaEventSynchronize(lap3);
+    // cudaEventElapsedTime(&ms, lap2, lap3);
+    // printf("Pipeline GPU time Lens shading correction: %.3f ms\n", ms);
     ////////////////////////////////////////////////////
     //
     //
@@ -1125,6 +1228,7 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     //
     //
     ////////////////////////////////////////////////////
+    double* D_AWBG;
     if(cfg.AWB)
     {
         float GAIN_RED;
@@ -1132,13 +1236,13 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
         float GAIN_BLUE;
         if(!cfg.AWB_Value_Given)
         {
-            double* D_AWBG;
+            
             double H_AWBG[3];
 
             cudaMalloc( &D_AWBG, 3 * sizeof(double));
             cudaMemset( D_AWBG, 0, 3 * sizeof(double));
 
-            AWBG_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, D_AWBG, cfg.orientation);
+            AWBG_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, D_AWBG,cfg.orientation);
             cudaDeviceSynchronize();
 
             cudaMemcpy(H_AWBG, D_AWBG, 3 * sizeof(double), cudaMemcpyDeviceToHost);
@@ -1146,7 +1250,7 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
             GAIN_RED  = (float)((double)(H_AWBG[0])/(double)(2*H_AWBG[2]));
             GAIN_GREEN = 1.0f;
             GAIN_BLUE = (float)((double)(H_AWBG[0])/(double)(2*H_AWBG[1]));
-            cudaFree(D_AWBG);
+            
 
         }
         else
@@ -1222,6 +1326,10 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
         
     }
 
+    // cudaEventRecord(lap4);
+    // cudaEventSynchronize(lap4);
+    // cudaEventElapsedTime(&ms, lap3, lap4);
+    // printf("Pipeline GPU time White balance: %.3f ms\n", ms);
 
     ////////////////////////////////////////////////////
     //
@@ -1292,6 +1400,11 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     }
 
 
+    // cudaEventRecord(lap5);
+    // cudaEventSynchronize(lap5);
+    // cudaEventElapsedTime(&ms, lap4, lap5);
+    // printf("Pipeline GPU time debayering: %.3f ms\n", ms);
+
 
     ////////////////////////////////////////////////////
     //
@@ -1323,6 +1436,12 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
         //cudaDeviceSynchronize();
     }
 
+    // cudaEventRecord(lap6);
+    // cudaEventSynchronize(lap6);
+    // cudaEventElapsedTime(&ms, lap5, lap6);
+    // printf("Pipeline GPU time CCM: %.3f ms\n", ms);
+
+
     ////////////////////////////////////////////////////
     //
     //
@@ -1332,11 +1451,15 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     ////////////////////////////////////////////////////
     if(cfg.Color_Space_Conversion)
     {
-        float CSC[9] = {0.2988, 0.5869, 0.1143, -0.1687, -0.3313, 0.5, 0.5, -0.4187, -0.0813};
-        cudaMemcpyToSymbol( D_MAT, CSC, 9 * sizeof(float));
-        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
+        Transform_Kernel_RGB_YCbCr<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
         //cudaDeviceSynchronize();
     }
+
+    // cudaEventRecord(lap7);
+    // cudaEventSynchronize(lap7);
+    // cudaEventElapsedTime(&ms, lap6, lap7);
+    // printf("Pipeline GPU time CSC 1: %.3f ms\n", ms);
+
 
     ////////////////////////////////////////////////////
     //
@@ -1356,7 +1479,9 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
             int shared_size = block_dim + 2 * padding;
             int shared_vol = shared_size * shared_size ;
             int shared_memory_vol = 3 * shared_vol * sizeof(float);
-            Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim),  shared_memory_vol>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, channel_temp_0, channel_temp_1, channel_temp_2, shared_size, shared_vol, padding, cfg.Bilateral_spatial_STD , cfg.Bilateral_Range_STD);
+            float spatial_pdt =  1.0f / (2.0f *cfg.Bilateral_spatial_STD*cfg.Bilateral_spatial_STD);
+            float range_pdt = 1.0f / (2.0f *cfg.Bilateral_Range_STD * cfg.Bilateral_Range_STD);
+            Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim),  shared_memory_vol>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, channel_temp_0, channel_temp_1, channel_temp_2, shared_size, shared_vol, padding, spatial_pdt , range_pdt);
             //cudaDeviceSynchronize();
 
             float* buf = channel_temp_0;
@@ -1378,7 +1503,9 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
             int padding = cfg.Bilateral_kernel_size /2;
             int shared_size = block_dim + 2 * padding;
             size_t shared_memory_vol = shared_size * shared_size * sizeof(float);
-            Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp_0, shared_size, padding, cfg.Bilateral_spatial_STD , cfg.Bilateral_Range_STD);
+            float spatial_pdt =  1.0f / (2.0f *cfg.Bilateral_spatial_STD*cfg.Bilateral_spatial_STD);
+            float range_pdt = 1.0f / (2.0f *cfg.Bilateral_Range_STD * cfg.Bilateral_Range_STD);
+            Bilateral_filter_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp_0, shared_size, padding, spatial_pdt , range_pdt);
             //cudaDeviceSynchronize();
 
             float* buf = channel_temp_0;
@@ -1387,6 +1514,11 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
         }
 
     }
+    
+    // cudaEventRecord(lap8);
+    // cudaEventSynchronize(lap8);
+    // cudaEventElapsedTime(&ms, lap7, lap8);
+    // printf("Pipeline GPU time Bilateral: %.3f ms\n", ms);
 
     ////////////////////////////////////////////////////
     //
@@ -1425,6 +1557,12 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
         CHANNEL_0 = buf;
 
     }
+    // cudaEventRecord(lap9);
+    // cudaEventSynchronize(lap9);
+    // cudaEventElapsedTime(&ms, lap8, lap9);
+    // printf("Pipeline GPU time Gaussian: %.3f ms\n", ms);
+
+    
 
     ////////////////////////////////////////////////////
     //
@@ -1463,11 +1601,15 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
 
     }
 
+    // cudaEventRecord(lap10);
+    // cudaEventSynchronize(lap10);
+    // cudaEventElapsedTime(&ms, lap9, lap10);
+    // printf("Pipeline GPU time Edge enhancement: %.3f ms\n", ms);
 
     ////////////////////////////////////////////////////
     //
     //
-    //  Brightness , Hue and Saturation Adjustment
+    //  Brightness , Hue, contrast, tint, vibrance and Saturation Adjustment
     //  Channel_0 :: Y   Channel_1 :: Cb    Channel_2 :: Cr
     //
     ////////////////////////////////////////////////////
@@ -1488,6 +1630,10 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
 
     }
 
+    // cudaEventRecord(lap11);
+    // cudaEventSynchronize(lap11);
+    // cudaEventElapsedTime(&ms, lap10, lap11);
+    // printf("Pipeline GPU time Tone control: %.3f ms\n", ms);
 
     ////////////////////////////////////////////////////
     //
@@ -1498,12 +1644,15 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     ////////////////////////////////////////////////////
     if(cfg.Color_Space_Conversion)
     {
-        float CSC[9] = {1, -0.0006, 1.4022, 1, -0.34468, -0.7139, 1, 1.77141, 0.00007};
-        cudaMemcpyToSymbol( D_MAT, CSC, 9 * sizeof(float));
-        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
+        Transform_Kernel_YCbCr_RGB<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
         //cudaDeviceSynchronize();
     }
 
+
+    // cudaEventRecord(lap12);
+    // cudaEventSynchronize(lap12);
+    // cudaEventElapsedTime(&ms, lap11, lap12);
+    // printf("Pipeline GPU time csc 2: %.3f ms\n", ms);
 
     ////////////////////////////////////////////////////
     //
@@ -1514,38 +1663,54 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     ////////////////////////////////////////////////////
     if(cfg.GAMMA)
     {
-        float *D_LUT;
         float x;
+      
 
-        cudaMalloc(&D_LUT, ((int)cfg.white_level+1) * sizeof(float));
+        std::vector<int> LUT(256);
 
-        std::vector<float> LUT((int)cfg.white_level+1);
-
-        for(int i=0;i<(cfg.white_level+1);i++)
+        for(int i=0;i<256;i++)
         {
-            x = (float)(i)/(cfg.white_level);
-            x = powf(x , (1.0f/cfg.GAMMA_VALUE));
+            x = (float)(i)/(255.0);
+            if(x<0.0031308f)
+            {
+                x = 12.92f * x;
+            }
+            else{
+                x = 1.055f * powf(x , (1.0f/cfg.GAMMA_VALUE)) - 0.055f;
+            }
             
-
-            LUT[i] = (x*cfg.white_level);
+            LUT[i] = (int)roundf(fmaxf(0.0f,fminf(255.0,x * 255.0f)));
         }
 
-        cudaMemcpy(D_LUT, LUT.data() , (cfg.white_level+1) *  sizeof(float), cudaMemcpyHostToDevice);
-        LUT_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, D_LUT, cfg.white_level);
+        
+
+        cudaMemcpyToSymbol(D_LUT, LUT.data() , (256) *  sizeof(int));
+        
+        LUT_kernel_Gamma<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, RED, GREEN, BLUE, 255.0f / cfg.white_level);
+
+
         cudaDeviceSynchronize();
-        cudaFree(D_LUT);
     }
 
+    
+    // cudaEventRecord(stop);
+    // cudaEventSynchronize(stop);
+    // cudaEventElapsedTime(&ms, lap12, stop);
+    // printf("Pipeline GPU time Gamma: %.3f ms\n", ms);
 
 
-    Norm_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, RED, GREEN, BLUE, cfg.white_level);
-    cudaDeviceSynchronize();
+    if(!cfg.GAMMA)
+    {    
+        Norm_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( CHANNEL_0, CHANNEL_1, CHANNEL_2, RED, GREEN, BLUE, 255.0f / cfg.white_level);
+        cudaDeviceSynchronize();
+    }
 
-    float ms;
+    cudaFree(D_AWBG);
+    
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&ms, start, stop);
-    printf("Pipeline GPU time 5: %.3f ms\n", ms);
+    printf("Pipeline GPU time Total: %.3f ms\n", ms);
 
     return ms;
     

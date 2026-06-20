@@ -79,3 +79,5 @@ cmake-build-*/
 # Generated binaries
 *.exe
 *.out
+
+time_avg_float.py
