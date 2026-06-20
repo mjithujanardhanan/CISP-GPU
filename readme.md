@@ -114,7 +114,7 @@ cmake --build build --config Release
 python app2.py
 
 ```
-app2.exe executes the ISP application
+app2.py executes the ISP application
 
 follow Readme.txt for proper usage instructions.
 
