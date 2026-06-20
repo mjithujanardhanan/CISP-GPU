@@ -6,7 +6,7 @@ import exiftool
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledFrame
 from PIL import Image, ImageTk
-from wrappers import ISP
+from wrappers3 import ISP
 from pathlib import Path as Pt
 import rawpy
 import cupy as cp
@@ -358,7 +358,7 @@ class ISPPipelineUI(tb.Window):
         # Slider - Vibrance
         tb.Label(self.control_panel, text="Vibrance:").pack(fill=X, pady=(10, 0))
         self.Vibrance_slider = tb.Scale(
-            self.control_panel, from_=1.0, to=3.0, bootstyle=INFO
+            self.control_panel, from_=0.0, to=3.0, bootstyle=INFO
         )
         self.Vibrance_slider.set(0)
         self.Vibrance_slider.pack(fill=X,padx=(0,20), pady=(0, 10))

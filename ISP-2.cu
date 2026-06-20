@@ -98,7 +98,7 @@ struct configuration                                                            
     bool    Tint = false;                                                               //toogle tint
     float   Tint_value = 1.0f;                                                          //value for tint
     bool    Vibrance = false;                                                           //toogle vibrance
-    float   Vibrance_value = 1.0f;                                                      //value for vibrance
+    float   Vibrance_value = 0.0f;                                                      //value for vibrance
 
     bool    Bilateral_Filter = false;                                                   //toogle bilateral filter
     bool    Joint_bilateral_kernel = false;
@@ -121,6 +121,12 @@ struct configuration                                                            
     
 };
 
+__forceinline__ __device__ int reflect_padding(int id, int limit)
+{
+    if(id < 0) return -1 * id;
+    else if(id >= limit) return 2*(limit-1) -id;
+    else return id;
+} 
 
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
 __global__ void DP_kernel(float* Image , float* image_out, float threshold)             // Defective pixel correction Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
@@ -482,277 +488,518 @@ __global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float 
 }
 
 
+// /* this program is an execution of edge aware interpolation of bayer domain image*/
+// __global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation)                                         //green interpolation (this is a trial to test if cooperative loading using shared memory or using threads for each halo is faster. the kernel will be replaced with most efficient one after profiling. )
+// {
+//     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
+//     int idx= abs(y-=2)* D_width  + abs(x-=2);
+
+//     __shared__ float buffer[20][21];                                                                                    // in format [y][x]
+
+//     int tx=threadIdx.x, ty=threadIdx.y;                                                                                 // thread x and thread y
+//     buffer[ty][tx] =0;
+//     if(y<D_length && x<D_width)
+//     {
+//         buffer[ty][tx] = Image[idx];
+//     }
+//     else if(y<D_length+2 && x<D_width+2)
+//     {
+        
+//         if(D_length+1-y == 1) y=D_length-2;
+//         else y=D_length-3;
+
+//         if(D_width+1-x == 1) x=D_width-2;
+//         else x=D_width-3;
+
+//         idx= abs(y)* D_width  + abs(x);
+//         buffer[ty][tx] = Image[idx];
+
+//     }
+
+//     __syncthreads(); 
+
+//     if(tx>1 && tx<18 && ty>1 && ty<18)
+//     {
+//         x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
+//         if(y<D_length && x<D_width)
+//         {
+//             int idx= y* D_width  + x;
+//             if(orientation == 0 || orientation == 3)
+//             {
+//                 if((x+y)&1)
+//                 {
+//                     output[idx]=buffer[ty][tx];
+//                 }
+//                 else
+//                 {
+//                     float dv = fabsf(buffer[ty-1][tx] - buffer[ty+1][tx]) + fabsf(2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]));
+//                     float dh = fabsf(buffer[ty][tx-1] - buffer[ty][tx+1]) + fabsf(2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]));
+
+//                     if (dh>dv)
+//                     {
+//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx])*0.5 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]))*0.25f);
+//                     }
+                    
+//                     else if (dh<dv)
+//                     {
+//                         output[idx] = ((buffer[ty][tx-1] + buffer[ty][tx+1])*0.5 + (2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.25f);
+//                     }
+//                     else
+//                     {
+//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx] + buffer[ty][tx-1] + buffer[ty][tx+1])*0.25 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]) +2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.125f);
+//                     }
+                    
+//                 }
+//             }
+
+//             else if(orientation == 1 || orientation == 2)
+//             {
+//                 if(!((x+y)&1))
+//                 {
+//                     output[idx]=buffer[ty][tx];
+//                 }
+//                 else
+//                 {
+//                     float dv = fabsf(buffer[ty-1][tx] - buffer[ty+1][tx]) + fabsf(2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]));
+//                     float dh = fabsf(buffer[ty][tx-1] - buffer[ty][tx+1]) + fabsf(2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]));
+
+//                     if (dh>dv)
+//                     {
+//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx])*0.5 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]))*0.25f);
+//                     }
+                    
+//                     else if (dh<dv)
+//                     {
+//                         output[idx] = ((buffer[ty][tx-1] + buffer[ty][tx+1])*0.5 + (2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.25f);
+//                     }
+//                     else
+//                     {
+//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx] + buffer[ty][tx-1] + buffer[ty][tx+1])*0.25 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]) +2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.125f);
+//                     }
+                    
+//                 }
+//             }
+//         }
+//     }
+// }
+
+// __global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int orientation)                 //color interpolation
+// {
+//     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
+//     int idx= abs(y-=2)* D_width  + abs(x-=2);
+
+//     __shared__ float buffer1[20][21], bufferg[20][21] ;
+
+//     int tx=threadIdx.x, ty=threadIdx.y;
+
+//     buffer1[ty][tx]=0;
+//     bufferg[ty][tx]=0;
+
+//     if(y<D_length && x<D_width)
+//     {
+//         buffer1[ty][tx] = Image[idx];
+//         bufferg[ty][tx] = green[idx];
+//     }
+//     else if(y<D_length+2 && x<D_width+2)
+//     {
+        
+//         if(D_length+1-y == 1) y=D_length-2;
+//         else y=D_length-3;
+
+//         if(D_width+1-x == 1) x=D_width-2;
+//         else x=D_width-3;
+
+//         idx= abs(y)* D_width  + abs(x);
+//         buffer1[ty][tx] = Image[idx];
+//         bufferg[ty][tx] = green[idx];
+
+//     }
+
+//     __syncthreads(); 
+
+//     if(tx>1 && tx<18 && ty>1 && ty<18)
+//     {
+//         int x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
+//         if(y<D_length && x<D_width)
+//         {
+//             int idx= y* D_width  + x;
+//             if(orientation == 0 || orientation == 3)
+//             {
+//                 if((x+y)&1)
+//                 {
+//                     if(orientation ==0)
+//                     {
+//                         if(x&1 && !(y&1))
+//                         {
+//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
+//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
+//                         }
+//                         else
+//                         {
+//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
+//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
+//                         }
+//                     }
+//                     else
+//                     {
+//                         if(x&1 && !(y&1))
+//                         {
+//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
+//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
+                            
+//                         }
+//                         else
+//                         {
+//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
+//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
+//                         }
+//                     }
+//                 }
+//                 else
+//                 {
+//                     if(orientation ==0)
+//                     {
+//                         if(y&1 && x&1)
+//                         {
+//                             red[idx] = (buffer1[ty][tx]);
+//                             blue[idx] =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         }
+//                         else 
+//                         {
+//                             blue[idx] =(buffer1[ty][tx]);
+//                             red[idx]  =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         }
+            
+//                     }
+//                     else
+//                     {
+//                         if(y&1 && x&1)
+//                         {
+//                             blue[idx] =(buffer1[ty][tx]);
+//                             red[idx]  =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         }
+//                         else 
+//                         {
+//                             red[idx]  =(buffer1[ty][tx]);
+//                             blue[idx] =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         }
+
+
+//                     }
+                    
+//                 }
+//             }
+
+//             if(orientation == 1 || orientation == 2)
+//             {
+//                 if(!((y+x)&1))
+//                 {
+//                     if(orientation ==1)
+//                     {
+//                         if(x&1 && y&1)
+//                         {
+//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
+//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
+                            
+//                         }
+//                         else
+//                         {
+//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
+//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
+//                         }
+//                     }
+//                     else
+//                     {
+//                         if(x&1 && y&1)
+//                         {
+//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
+//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
+//                         }
+//                         else
+//                         {
+//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
+//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
+//                         }
+//                     }
+//                 }
+//                 else
+//                 {
+//                     if(orientation ==1)
+//                     {
+//                         if(!(y&1) && x&1)
+//                         {
+//                             blue[idx] = (buffer1[ty][tx]);
+//                             red[idx]  = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         }
+//                         else 
+//                         {
+//                             red[idx]  = (buffer1[ty][tx]);
+//                             blue[idx] = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         }
+            
+//                     }
+//                     else
+//                     {
+//                         if(!(y&1) && x&1)
+//                         {
+//                             red[idx]  = (buffer1[ty][tx]);
+//                             blue[idx] = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         } 
+//                         else 
+//                         {
+//                             blue[idx] = (buffer1[ty][tx]);
+//                             red[idx]  = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
+//                         }
+
+
+//                     }
+                    
+//                 }
+//             }
+//         }
+//     }
+// }
+
+
 /* this program is an execution of edge aware interpolation of bayer domain image*/
-__global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation)                                         //green interpolation (this is a trial to test if cooperative loading using shared memory or using threads for each halo is faster. the kernel will be replaced with most efficient one after profiling. )
+__global__ void DEBAYER_kernel_1(float* Image , float* output, int shared_size, int padding, int orientation)                                         //green interpolation (this is a trial to test if cooperative loading using shared memory or using threads for each halo is faster. the kernel will be replaced with most efficient one after profiling. )
 {
-    int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
-    int idx= abs(y-=2)* D_width  + abs(x-=2);
-
-    __shared__ float buffer[20][21];                                                                                    // in format [y][x]
-
-    int tx=threadIdx.x, ty=threadIdx.y;                                                                                 // thread x and thread y
-    buffer[ty][tx] =0;
-    if(y<D_length && x<D_width)
-    {
-        buffer[ty][tx] = Image[idx];
-    }
-    else if(y<D_length+2 && x<D_width+2)
-    {
-        
-        if(D_length+1-y == 1) y=D_length-2;
-        else y=D_length-3;
-
-        if(D_width+1-x == 1) x=D_width-2;
-        else x=D_width-3;
-
-        idx= abs(y)* D_width  + abs(x);
-        buffer[ty][tx] = Image[idx];
-
-    }
-
-    __syncthreads(); 
-
-    if(tx>1 && tx<18 && ty>1 && ty<18)
-    {
-        x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
-        if(y<D_length && x<D_width)
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+    int idx= (y)* D_width  + (x);  
+    //int shared_size = block_dim + 2*padding;
+    int ty = threadIdx.y, tx = threadIdx.x;
+    int ty0 = ty+padding, tx0 = tx+padding;
+    extern __shared__ float buffer[];
+    for(int l = 0; (ty + l * block_dim) < shared_size; l++)
+        for(int m = 0; (tx + m * block_dim)< shared_size; m++)
         {
-            int idx= y* D_width  + x;
-            if(orientation == 0 || orientation == 3)
-            {
-                if((x+y)&1)
-                {
-                    output[idx]=buffer[ty][tx];
-                }
-                else
-                {
-                    float dv = fabsf(buffer[ty-1][tx] - buffer[ty+1][tx]) + fabsf(2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]));
-                    float dh = fabsf(buffer[ty][tx-1] - buffer[ty][tx+1]) + fabsf(2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]));
+            int x0 = reflect_padding((x - padding) + m * block_dim , D_width );
+            int y0 = reflect_padding((y - padding) + l * block_dim , D_length );
 
-                    if (dh>dv)
-                    {
-                        output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx])*0.5 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]))*0.25f);
-                    }
-                    
-                    else if (dh<dv)
-                    {
-                        output[idx] = ((buffer[ty][tx-1] + buffer[ty][tx+1])*0.5 + (2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.25f);
-                    }
-                    else
-                    {
-                        output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx] + buffer[ty][tx-1] + buffer[ty][tx+1])*0.25 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]) +2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.125f);
-                    }
-                    
-                }
-            }
-
-            else if(orientation == 1 || orientation == 2)
-            {
-                if(!((x+y)&1))
-                {
-                    output[idx]=buffer[ty][tx];
-                }
-                else
-                {
-                    float dv = fabsf(buffer[ty-1][tx] - buffer[ty+1][tx]) + fabsf(2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]));
-                    float dh = fabsf(buffer[ty][tx-1] - buffer[ty][tx+1]) + fabsf(2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]));
-
-                    if (dh>dv)
-                    {
-                        output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx])*0.5 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]))*0.25f);
-                    }
-                    
-                    else if (dh<dv)
-                    {
-                        output[idx] = ((buffer[ty][tx-1] + buffer[ty][tx+1])*0.5 + (2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.25f);
-                    }
-                    else
-                    {
-                        output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx] + buffer[ty][tx-1] + buffer[ty][tx+1])*0.25 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]) +2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.125f);
-                    }
-                    
-                }
-            }
+            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = Image[y0 * D_width + x0];
         }
-    }
-}
 
-__global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int orientation)                 //color interpolation
-{
-    int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
-    int idx= abs(y-=2)* D_width  + abs(x-=2);
+    __syncthreads();
 
-    __shared__ float buffer1[20][21], bufferg[20][21] ;
-
-    int tx=threadIdx.x, ty=threadIdx.y;
-
-    buffer1[ty][tx]=0;
-    bufferg[ty][tx]=0;
 
     if(y<D_length && x<D_width)
     {
-        buffer1[ty][tx] = Image[idx];
-        bufferg[ty][tx] = green[idx];
-    }
-    else if(y<D_length+2 && x<D_width+2)
-    {
-        
-        if(D_length+1-y == 1) y=D_length-2;
-        else y=D_length-3;
-
-        if(D_width+1-x == 1) x=D_width-2;
-        else x=D_width-3;
-
-        idx= abs(y)* D_width  + abs(x);
-        buffer1[ty][tx] = Image[idx];
-        bufferg[ty][tx] = green[idx];
-
-    }
-
-    __syncthreads(); 
-
-    if(tx>1 && tx<18 && ty>1 && ty<18)
-    {
-        int x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
-        if(y<D_length && x<D_width)
+        if(orientation == 0 || orientation == 3)
         {
-            int idx= y* D_width  + x;
-            if(orientation == 0 || orientation == 3)
+            if( (x+y) & 1 )
             {
-                if((x+y)&1)
+                output[idx] = buffer[ty0 * shared_size + tx0 ];
+            }
+            else
+            {
+                float dv = fabsf(buffer[(ty0-1) * shared_size + tx0] - buffer[(ty0+1) * shared_size + tx0]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]));
+                float dh = fabsf(buffer[ty0 * shared_size + (tx0-1)] - buffer[ty0 * shared_size + (tx0+1)]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]));
+
+
+                if (dh>dv)
                 {
-                    if(orientation ==0)
-                    {
-                        if(x&1 && !(y&1))
-                        {
-                            red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-                            blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-                        }
-                        else
-                        {
-                            blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-                            red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-                        }
-                    }
-                    else
-                    {
-                        if(x&1 && !(y&1))
-                        {
-                            blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-                            red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-                            
-                        }
-                        else
-                        {
-                            red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-                            blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-                        }
-                    }
+                    output[idx] = ((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]))*0.25f);
+                }
+                
+                else if (dh<dv)
+                {
+                    output[idx] = ((buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.25f);
                 }
                 else
                 {
-                    if(orientation ==0)
-                    {
-                        if(y&1 && x&1)
-                        {
-                            red[idx] = (buffer1[ty][tx]);
-                            blue[idx] =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        }
-                        else 
-                        {
-                            blue[idx] =(buffer1[ty][tx]);
-                            red[idx]  =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        }
-            
-                    }
-                    else
-                    {
-                        if(y&1 && x&1)
-                        {
-                            blue[idx] =(buffer1[ty][tx]);
-                            red[idx]  =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        }
-                        else 
-                        {
-                            red[idx]  =(buffer1[ty][tx]);
-                            blue[idx] =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        }
-
-
-                    }
-                    
+                    output[idx] = (((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0] + buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.25 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]) +2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.125f));
                 }
+                
             }
 
-            if(orientation == 1 || orientation == 2)
-            {
-                if(!((y+x)&1))
-                {
-                    if(orientation ==1)
-                    {
-                        if(x&1 && y&1)
-                        {
-                            blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-                            red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-                            
-                        }
-                        else
-                        {
-                            red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-                            blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-                        }
-                    }
-                    else
-                    {
-                        if(x&1 && y&1)
-                        {
-                            red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-                            blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-                        }
-                        else
-                        {
-                            blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-                            red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-                        }
-                    }
-                }
-                else
-                {
-                    if(orientation ==1)
-                    {
-                        if(!(y&1) && x&1)
-                        {
-                            blue[idx] = (buffer1[ty][tx]);
-                            red[idx]  = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        }
-                        else 
-                        {
-                            red[idx]  = (buffer1[ty][tx]);
-                            blue[idx] = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        }
-            
-                    }
-                    else
-                    {
-                        if(!(y&1) && x&1)
-                        {
-                            red[idx]  = (buffer1[ty][tx]);
-                            blue[idx] = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        } 
-                        else 
-                        {
-                            blue[idx] = (buffer1[ty][tx]);
-                            red[idx]  = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-                        }
-
-
-                    }
-                    
-                }
-            }
         }
+
+        else if(orientation == 1 || orientation == 2)
+        {
+            if(!((x+y)&1))
+            {
+                output[idx]=buffer[ty0 * shared_size + tx0 ];
+            }
+            else
+            {
+                float dv = fabsf(buffer[(ty0-1) * shared_size + tx0] - buffer[(ty0+1) * shared_size + tx0]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]));
+                float dh = fabsf(buffer[ty0 * shared_size + (tx0-1)] - buffer[ty0 * shared_size + (tx0+1)]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]));
+
+                if (dh>dv)
+                {
+                    output[idx] = ((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]))*0.25f);
+                }
+                
+                else if (dh<dv)
+                {
+                    output[idx] = ((buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.25f);
+                }
+                else
+                {
+                    output[idx] = (((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0] + buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.25 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]) +2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.125f));
+                }
+
+
+            }
+
+        }
+        
     }
+
 }
+
+__global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int shared_size,int shared_vol, int padding, int orientation)                 //color interpolation
+{
+    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
+    int idx= (y)* D_width  + (x);  
+    //int shared_size = block_dim + 2*padding;
+    int ty = threadIdx.y, tx = threadIdx.x;
+    int ty0 = ty+padding, tx0 = tx+padding;
+    extern __shared__ float buffer[];
+    for(int l = 0; (ty + l * block_dim) < shared_size; l++)
+        for(int m = 0; (tx + m * block_dim)< shared_size; m++)
+        {
+            int x0 = reflect_padding((x - padding) + m * block_dim , D_width );
+            int y0 = reflect_padding((y - padding) + l * block_dim , D_length );
+
+            buffer[(ty + l * block_dim) * shared_size + (tx + m * block_dim)] = Image[y0 * D_width + x0];
+            buffer[shared_vol +  (ty + l * block_dim) * shared_size + (tx + m * block_dim)] = green[y0 * D_width + x0];
+        }
+
+    __syncthreads();
+
+    if(y<D_length && x<D_width)
+    {
+        bool x_parity = x&1, y_parity = y&1;
+        switch (orientation)
+        {
+
+            case 0:
+                
+                    
+                if(!x_parity && !y_parity)
+                {
+                    blue[idx] =(buffer[ty0 * shared_size + tx0]);
+                    red[idx]  =(buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+                }
+                else if(x_parity && !y_parity)
+                {
+                    red[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    blue[idx]= (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+                }
+                else if(!x_parity && y_parity)
+                {
+                    blue[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    red[idx]  = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+                }
+                else
+                {
+                    red[idx] =(buffer[ty0 * shared_size + tx0]);
+                    blue[idx]=(buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+
+                }
+
+                
+
+
+                break;
+            
+
+            case 1:
+                
+                if(!x_parity && !y_parity)
+                {
+                    red[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    blue[idx]= (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+
+                }
+                else if(x_parity && !y_parity)
+                {
+                    blue[idx] = (buffer[ty0 * shared_size + tx0]);
+                    red[idx]  = (buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+                }
+                else if(!x_parity && y_parity)
+                {
+                    red[idx] = (buffer[ty0 * shared_size + tx0]);
+                    blue[idx]= (buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+                }
+                else
+                {
+                    blue[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    red[idx]  = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+                }
+
+                
+                break;
+
+
+            case 2:
+                
+                if(!x_parity && !y_parity)
+                {
+                    blue[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    red[idx]  = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+                }
+                else if(x_parity && !y_parity)
+                {
+                    red[idx] =(buffer[ty0 * shared_size + tx0]);
+                    blue[idx]=(buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+                }
+                else if(!x_parity && y_parity)
+                {
+                    blue[idx] =(buffer[ty0 * shared_size + tx0]);
+                    red[idx]  =(buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+                }
+                else
+                {
+                    red[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    blue[idx]= (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+                    
+                }
+
+                
+                break;
+
+
+            case 3:
+                
+                if(!x_parity && !y_parity)
+                {
+                    red[idx] = (buffer[ty0 * shared_size + tx0]);
+                    blue[idx]= (buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+                }
+                else if(x_parity && !y_parity)
+                {
+                    blue[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    red[idx]  = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+
+                }
+                else if(!x_parity && y_parity)
+                {
+                    red[idx] = (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[(ty0-1) * shared_size + tx0]-buffer[shared_vol + (ty0-1) * shared_size + tx0] + (buffer[(ty0+1) * shared_size + tx0]-buffer[shared_vol + (ty0+1) * shared_size + tx0])));                     //vertical interpolation
+                    blue[idx]= (buffer[shared_vol + ty0 * shared_size + tx0]+0.5f *(buffer[ty0 * shared_size + (tx0-1)]-buffer[shared_vol + ty0 * shared_size + (tx0-1)] + (buffer[ty0 * shared_size + (tx0+1)]-buffer[shared_vol + ty0 * shared_size + (tx0+1)])));                     //horizontal interpolation
+                }
+                else
+                {
+                    blue[idx] = (buffer[ty0 * shared_size + tx0]);
+                    red[idx]  = (buffer[shared_vol + ty0 * shared_size + tx0]+0.25f*(buffer[(ty0-1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0-1)] + buffer[(ty0+1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0+1)] +buffer[(ty0-1) * shared_size + (tx0+1)]-buffer[shared_vol + (ty0-1) * shared_size + (tx0+1)] + buffer[(ty0+1) * shared_size + (tx0-1)]-buffer[shared_vol + (ty0+1) * shared_size + (tx0-1)]));
+                }
+
+                
+                break;
+
+
+            default:
+                
+                break;
+        }
+
+    }
+
+}
+
+
+
 
 /* this program is for applying transform matrix to the color image*/
 __global__ void Transform_Kernel(float* channel_1, float* channel_2, float* channel_3)
@@ -820,8 +1067,9 @@ __global__ void Color_control_kernel( float* channel_1, float* channel_2, float*
         }
         if(hue)
         {
+            float temp = c2;
             c2 = D_hue[0] * c2 + D_hue[1] * c3;
-            c3 = D_hue[2] * c2 + D_hue[3] * c3;
+            c3 = D_hue[2] * temp + D_hue[3] * c3;
         }
         if(contrast)
         {
@@ -865,12 +1113,6 @@ __global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, in
 
 /* this kernel performs bilateral filtering on the image*/
 
-__forceinline__ __device__ int reflect_padding(int id, int limit)
-{
-    if(id < 0) return -1 * id;
-    else if(id >= limit) return 2*(limit-1) -id;
-    else return id;
-} 
 
 __global__ void Bilateral_filter_kernel(float* channel_input, float* channel_output, int shared_size, int padding, float dim_variance, float range_variance)
 {
@@ -1036,7 +1278,7 @@ __global__ void Gaussian_Blur_kernel(float* channel_input, float* channel_output
 
 
 // Host code for Image Signal Processing Pipeline
-void ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t buffer_3, uint64_t buffer_4, uint64_t buffer_5, uint64_t buffer_6, uint64_t buffer_int_1, uint64_t buffer_int_2, uint64_t buffer_int_3, const configuration& cfg )    
+float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t buffer_3, uint64_t buffer_4, uint64_t buffer_5, uint64_t buffer_6, uint64_t buffer_int_1, uint64_t buffer_int_2, uint64_t buffer_int_3, const configuration& cfg )    
 {
     
     cudaEvent_t start, stop;
@@ -1209,10 +1451,58 @@ void ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t bu
     int* GREEN = reinterpret_cast<int *> (buffer_int_2);
     int* BLUE =reinterpret_cast<int *> (buffer_int_3);
 
-    DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, cfg.orientation); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
-    //cudaDeviceSynchronize();
-    DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim+4 ,block_dim+4)>>>(D_image_2, CHANNEL_1, CHANNEL_0, CHANNEL_2, cfg.orientation);
-    //cudaDeviceSynchronize();
+    int padding = 2;
+    int shared_size = block_dim + 2 * padding;
+    int shared_vol = shared_size * shared_size ;
+    int shared_memory_vol = shared_vol * sizeof(float);
+
+
+    switch (cfg.orientation)
+    {
+        case 0:
+            /* code */
+            DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2, CHANNEL_1, shared_size, padding, 0); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
+            //cudaDeviceSynchronize();
+
+            shared_memory_vol = shared_memory_vol * 2;
+
+            DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2, CHANNEL_1, CHANNEL_0,  CHANNEL_2, shared_size, shared_vol,  padding, 0);
+        //cudaDeviceSynchronize();
+            break;
+        case 1:
+            DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2,CHANNEL_1, shared_size, padding, 1); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
+            //cudaDeviceSynchronize();
+
+            shared_memory_vol = shared_memory_vol * 2;
+
+            DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2, CHANNEL_1, CHANNEL_0,  CHANNEL_2, shared_size, shared_vol,  padding, 1);
+        //cudaDeviceSynchronize();
+            break;
+        case 2:
+            DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2, CHANNEL_1, shared_size, padding, 2); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
+            //cudaDeviceSynchronize();
+
+            shared_memory_vol = shared_memory_vol * 2;
+
+            DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2, CHANNEL_1, CHANNEL_0,  CHANNEL_2, shared_size, shared_vol,  padding, 2);
+            //cudaDeviceSynchronize();
+            /* code */
+            break;
+        case 3:
+            DEBAYER_kernel_1<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2,  CHANNEL_1, shared_size, padding, 3); // the no of threads are increased to 400 per block for acting as halo and padding for the block level operations
+            //cudaDeviceSynchronize();
+
+            shared_memory_vol = shared_memory_vol * 2;
+
+            DEBAYER_kernel_2<<<dim3(blockx,blocky),dim3(block_dim ,block_dim), shared_memory_vol>>>(D_image_2, CHANNEL_1, CHANNEL_0,  CHANNEL_2, shared_size, shared_vol,  padding, 3);
+            //cudaDeviceSynchronize();
+            /* code */
+            break;
+        
+        default:
+            break;
+    }
+
 
 
     ////////////////////////////////////////////////////
@@ -1373,6 +1663,8 @@ void ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t bu
                 sum+=gaussian[(i+padding) * cfg.Edge_enhancement_kernel_size + (j+padding)];
             }
         for(int i=0 ; i < kernel_vol ; i++) gaussian[i]/=sum;
+        
+        cudaMemcpyToSymbol(D_EDGE, gaussian, kernel_vol * sizeof(float));
 
         Edge_enhancement_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim), shared_memory_vol>>>( CHANNEL_0, channel_temp_0, shared_size, padding, cfg.Edge_enhancement_kernel_size,  cfg.Edge_enhancement_A_Value);
         //cudaDeviceSynchronize();
@@ -1467,7 +1759,7 @@ void ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t bu
     cudaEventElapsedTime(&ms, start, stop);
     printf("Pipeline GPU time 5: %.3f ms\n", ms);
 
-    return;
+    return ms;
     
 }
 
