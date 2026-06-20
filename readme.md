@@ -108,6 +108,7 @@ pip install -r requirements.txt
 
 
 cmake -S . -B build
+mkdir wrappers
 cmake --build build --config Release
 
 python app2.py
@@ -135,6 +136,11 @@ input the path to the raw image and press enter to load. The toogle button can b
 - ISP.cu        :: Pipeline Code
 - Sample_input  :: contains a few raw images for testing
 - src           :: contains individual kernels for each operation
+
+
+#Updates
+-19/06/2026 : current avg runtime(10000 runs) : 9.41 ms
+-20/06/2026 : Fused Lens shading correction and Black Level Correction Kernels, grouped variable to device memory transfers.  current avg runtime (10000 runs)  : 9.21 ms 
 
 # Future work
 

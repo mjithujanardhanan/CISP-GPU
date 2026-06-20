@@ -22,7 +22,7 @@ set(MODULE_NAME ISP)
 
 # 5. Create the library
 # pybind11_add_module handles the special flags needed for Python extensions
-pybind11_add_module(${MODULE_NAME} ISP-INT.cu)
+pybind11_add_module(${MODULE_NAME} ISP-2.cu)
 
 # 6. Configure CUDA Architectures
 # This tells NVCC which GPU generation to compile for. 

@@ -17,6 +17,8 @@ ENV/
 # Distribution / packaging
 build/
 paper/
+wrappers/
+wrappers2/
 dist/
 *.egg-info/
 .eggs/

@@ -6,7 +6,7 @@ import exiftool
 from ttkbootstrap.constants import *
 from ttkbootstrap.scrolled import ScrolledFrame
 from PIL import Image, ImageTk
-from wrappers3 import ISP
+from wrappers import ISP
 from pathlib import Path as Pt
 import rawpy
 import cupy as cp

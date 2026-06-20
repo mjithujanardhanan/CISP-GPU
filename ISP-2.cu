@@ -49,8 +49,8 @@ Operation::
 namespace py = pybind11;
 
 __constant__ float D_MAT[9];                                                            //Matrix for kernel operations
-__constant__ float D_BLC_Offset[4];                                                     //Black level correction 
-__constant__ float D_LSC[4];                                                            //Lens shading correction values
+// __constant__ float D_BLC_Offset[4];                                                     //Black level correction 
+// __constant__ float D_LSC[4];                                                            //Lens shading correction values
 __constant__ float D_EDGE[256];                                                         //max kernel size = 16 
 __constant__ float D_hue[4];                                                            // Rotation matrix for hue adjustment
 __constant__ float D_GAUSSIAN[256];                                                     // max Gaussian Kernel size = 16
@@ -128,6 +128,43 @@ __forceinline__ __device__ int reflect_padding(int id, int limit)
     else return id;
 } 
 
+struct working_data
+{
+    float D_BLC_Offset[4];
+    float D_LSC[4];
+};
+
+__constant__ working_data D_data;
+
+void load_data(configuration cfg)
+{
+
+    working_data H_data;
+
+    if(cfg.BLC)
+    {
+    if(cfg.BLC_Offset.size() != 4)
+    {
+        throw std::runtime_error("BLC Offset must contain exactly 4 positive integer values");
+    }
+    memcpy(H_data.D_BLC_Offset, cfg.BLC_Offset.data(), 4 * sizeof(float));
+    }
+    if(cfg.LSC)
+    {
+    if(cfg.LSC_gain.size() != 4)
+    {
+        throw std::runtime_error("LSC Gain must contain exactly 4 values");
+    }
+    memcpy(H_data.D_LSC, cfg.LSC_gain.data(), 4 * sizeof(float));
+    }
+
+    cudaMemcpyToSymbol(D_data, &H_data, 1 * sizeof(working_data));
+
+}
+
+
+
+
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
 __global__ void DP_kernel(float* Image , float* image_out, float threshold)             // Defective pixel correction Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
 {
@@ -190,45 +227,29 @@ __global__ void DP_kernel(float* Image , float* image_out, float threshold)     
 }
 
 /* this program is an execution of Black Level correction on digital bayer domain images*/
-__global__ void BLC_kernel(float* Image)
+__global__ void BLC_LSC_kernel(float* Image, bool BLC, bool LSC, float Max_radius)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
     int idx= (y)* D_width  + (x);
     if(y<D_length && x<D_width)
     {
+        if(BLC)
+            Image[idx] = (Image[idx] - D_data.D_BLC_Offset[(y&1) * 2 + (x&2)]);
 
-       float offset[2][2]={{D_BLC_Offset[0],D_BLC_Offset[1]},{D_BLC_Offset[2],D_BLC_Offset[3]}};
-
-       Image[idx] = (Image[idx] - offset[y%2][x%2]);
-
+        if(LSC)
+        {
+            int idx= (y)* D_width  + (x);
+            float dx = float(D_width)/2.0f  -(float)x; //dx distance from centre to x (here x is x)
+            float dy = float(D_length)/2.0f -(float)y;//dy distance from centre to y (here y is y)
+            float r = sqrtf(dx*dx + dy*dy); //radius r calculation
+            
+            Image[idx] = Image[idx]*( 1.0f + r*D_data.D_LSC[(y&1) * 2 + (x&2)]/ Max_radius);  /*lens shading correction modelled as a linear function (original lens shading is modelled
+                                                                                    as a cos^4 function which will be implemented in a future version. this is adopted only for development purpose)*/
+        }
     }
-
-
 
 }
 
-/* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
-__global__ void LSC_kernel(float* Image ,  float Max_radius)                                                            // gain is for every color in bayer format image assed in the input configuration.(will be upgraded to warp level reduction kernel) 
-{
-    /* D_LSC - gain for each of g1,g2,r,b pixels in order of bayer pattern, Max_radius - maximum radius for LSC calculation
-    */
-    int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y; 
-    if(y<D_length && x<D_width) //boundary check
-    {
-        int idx= (y)* D_width  + (x);
-        float a[2][2]={{D_LSC[0],D_LSC[1]},{D_LSC[2],D_LSC[3]}};
-        float dx = float(D_width)/2.0f  -(float)x; //dx distance from centre to x (here x is x)
-        float dy = float(D_length)/2.0f -(float)y;//dy distance from centre to y (here y is y)
-        float r = sqrtf(dx*dx + dy*dy); //radius r calculation
-        
-        Image[idx] = Image[idx]*( 1.0f + r*a[y%2][x%2]/ Max_radius);  /*lens shading correction modelled as a linear function (original lens shading is modelled
-                                                                                as a cos^4 function which will be implemented in a future version. this is adopted only for development purpose)*/
-
-    }
-
-
-
-}
 
 /* this program is an calculation of automatic white balance gain on digital bayer domain images*/
 __global__ void AWBG_kernel(float* Image , double* awbg,int orientation)                                                // || BGGR - 0 ||  GBRG -1 || GRBG -2 || RGGB -3 ||
@@ -245,67 +266,80 @@ __global__ void AWBG_kernel(float* Image , double* awbg,int orientation)        
 
     if(y<D_length && x<D_width)
     {
-    int idx= (y)* D_width  + (x);                                                                                                                           // Idx is the index of the pixel in the flattened array. 
-    if(y&1 && x&1)
-            {
-                if(orientation ==1 || orientation ==2)
-                {
-                    Green_sum[threadid]  = Image[idx];
-                }
-                else if(orientation ==0)
-                {
-                    Red_sum[threadid]  =Image[idx];
-                }
-                else
-                {
-                    Blue_sum[threadid]  =Image[idx];
-                }
-            }
-            else if(!(y&1) && !(x&1))
-            {
-                if(orientation ==1 || orientation ==2)
-                {
-                    Green_sum[threadid]  = Image[idx];
-                }
-                else if(orientation ==0)
-                {
-                    Blue_sum[threadid]  =Image[idx];
-                }
-                else
-                {
-                    Red_sum[threadid]  =Image[idx];
-                }
-            }
+        int idx= (y)* D_width  + (x);    
+        bool y_parity = y&1, x_parity = x&1;                                                                                                                       // Idx is the index of the pixel in the flattened array. 
         
-            else if((y&1) && !(x&1))
+            switch (orientation)
             {
-                if(orientation ==0 || orientation ==3)
-                {
-                    Green_sum[threadid]  = Image[idx];
-                }
-                else if(orientation ==1)
-                {
-                    Blue_sum[threadid]  =Image[idx];
-                }
-                else
-                {
-                    Red_sum[threadid]  =Image[idx];
-                }
-            }
-            else 
-            {
-                if(orientation ==0 || orientation ==3)
-                {
-                    Green_sum[threadid]  = Image[idx];
-                }
-                else if(orientation ==1)
-                {
-                    Red_sum[threadid]  =Image[idx];
-                }
-                else
-                {
-                    Blue_sum[threadid]  =Image[idx];
-                }
+
+
+                case 0:
+                    /* code */
+                    if(y_parity && x_parity)
+                    {
+                        Red_sum[threadid]  =Image[idx];
+                    }
+                    else if(!y_parity && !x_parity)
+                    {
+                        Blue_sum[threadid]  =Image[idx];
+                    }
+                    else
+                    {
+                        Green_sum[threadid]  = Image[idx];
+                    }
+                    
+                    break;
+
+                case 1:
+                    /* code */
+                    if(!y_parity && x_parity)
+                    {
+                        Red_sum[threadid]  =Image[idx];
+                    }
+                    else if(y_parity && !x_parity)
+                    {
+                        Blue_sum[threadid]  =Image[idx];
+                    }
+                    else
+                    {
+                        Green_sum[threadid]  = Image[idx];
+                    }
+                    break;
+
+                case 2:
+                    /* code */
+                    if(!y_parity && x_parity)
+                    {
+                        Blue_sum[threadid]  =Image[idx];
+                    }
+                    else if(y_parity && !x_parity)
+                    {
+                        Red_sum[threadid]  =Image[idx];
+                    }
+                    else
+                    {
+                        Green_sum[threadid]  = Image[idx];
+                    }
+                    break;
+
+                case 3:
+                    /* code */
+                    if(y_parity && x_parity)
+                    {
+                        Blue_sum[threadid]  =Image[idx];
+                    }
+                    else if(!y_parity && !x_parity)
+                    {
+                        Red_sum[threadid]  =Image[idx];
+                    }
+                    else
+                    {
+                        Green_sum[threadid]  = Image[idx];
+                    }
+                    break;
+                
+                default:
+                    break;
             }
     }
     __syncthreads();
@@ -486,280 +520,6 @@ __global__ void AWBG_Apply_kernel(float* Image ,float gain_r,float gain_g,float 
     */
 
 }
-
-
-// /* this program is an execution of edge aware interpolation of bayer domain image*/
-// __global__ void DEBAYER_kernel_1(float* Image , float* output, int orientation)                                         //green interpolation (this is a trial to test if cooperative loading using shared memory or using threads for each halo is faster. the kernel will be replaced with most efficient one after profiling. )
-// {
-//     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
-//     int idx= abs(y-=2)* D_width  + abs(x-=2);
-
-//     __shared__ float buffer[20][21];                                                                                    // in format [y][x]
-
-//     int tx=threadIdx.x, ty=threadIdx.y;                                                                                 // thread x and thread y
-//     buffer[ty][tx] =0;
-//     if(y<D_length && x<D_width)
-//     {
-//         buffer[ty][tx] = Image[idx];
-//     }
-//     else if(y<D_length+2 && x<D_width+2)
-//     {
-        
-//         if(D_length+1-y == 1) y=D_length-2;
-//         else y=D_length-3;
-
-//         if(D_width+1-x == 1) x=D_width-2;
-//         else x=D_width-3;
-
-//         idx= abs(y)* D_width  + abs(x);
-//         buffer[ty][tx] = Image[idx];
-
-//     }
-
-//     __syncthreads(); 
-
-//     if(tx>1 && tx<18 && ty>1 && ty<18)
-//     {
-//         x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
-//         if(y<D_length && x<D_width)
-//         {
-//             int idx= y* D_width  + x;
-//             if(orientation == 0 || orientation == 3)
-//             {
-//                 if((x+y)&1)
-//                 {
-//                     output[idx]=buffer[ty][tx];
-//                 }
-//                 else
-//                 {
-//                     float dv = fabsf(buffer[ty-1][tx] - buffer[ty+1][tx]) + fabsf(2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]));
-//                     float dh = fabsf(buffer[ty][tx-1] - buffer[ty][tx+1]) + fabsf(2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]));
-
-//                     if (dh>dv)
-//                     {
-//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx])*0.5 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]))*0.25f);
-//                     }
-                    
-//                     else if (dh<dv)
-//                     {
-//                         output[idx] = ((buffer[ty][tx-1] + buffer[ty][tx+1])*0.5 + (2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.25f);
-//                     }
-//                     else
-//                     {
-//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx] + buffer[ty][tx-1] + buffer[ty][tx+1])*0.25 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]) +2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.125f);
-//                     }
-                    
-//                 }
-//             }
-
-//             else if(orientation == 1 || orientation == 2)
-//             {
-//                 if(!((x+y)&1))
-//                 {
-//                     output[idx]=buffer[ty][tx];
-//                 }
-//                 else
-//                 {
-//                     float dv = fabsf(buffer[ty-1][tx] - buffer[ty+1][tx]) + fabsf(2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]));
-//                     float dh = fabsf(buffer[ty][tx-1] - buffer[ty][tx+1]) + fabsf(2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]));
-
-//                     if (dh>dv)
-//                     {
-//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx])*0.5 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]))*0.25f);
-//                     }
-                    
-//                     else if (dh<dv)
-//                     {
-//                         output[idx] = ((buffer[ty][tx-1] + buffer[ty][tx+1])*0.5 + (2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.25f);
-//                     }
-//                     else
-//                     {
-//                         output[idx] = ((buffer[ty-1][tx] + buffer[ty+1][tx] + buffer[ty][tx-1] + buffer[ty][tx+1])*0.25 + (2* buffer[ty][tx] -(buffer[ty-2][tx] + buffer[ty+2][tx]) +2* buffer[ty][tx] -(buffer[ty][tx-2] + buffer[ty][tx+2]))*0.125f);
-//                     }
-                    
-//                 }
-//             }
-//         }
-//     }
-// }
-
-// __global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float* blue, int orientation)                 //color interpolation
-// {
-//     int x=blockIdx.x * block_dim + threadIdx.x, y=blockIdx.y * block_dim + threadIdx.y;                                                 //int j=blockIdx.x * block_dim + threadIdx.x, i=blockIdx.y * block_dim + threadIdx.y;
-//     int idx= abs(y-=2)* D_width  + abs(x-=2);
-
-//     __shared__ float buffer1[20][21], bufferg[20][21] ;
-
-//     int tx=threadIdx.x, ty=threadIdx.y;
-
-//     buffer1[ty][tx]=0;
-//     bufferg[ty][tx]=0;
-
-//     if(y<D_length && x<D_width)
-//     {
-//         buffer1[ty][tx] = Image[idx];
-//         bufferg[ty][tx] = green[idx];
-//     }
-//     else if(y<D_length+2 && x<D_width+2)
-//     {
-        
-//         if(D_length+1-y == 1) y=D_length-2;
-//         else y=D_length-3;
-
-//         if(D_width+1-x == 1) x=D_width-2;
-//         else x=D_width-3;
-
-//         idx= abs(y)* D_width  + abs(x);
-//         buffer1[ty][tx] = Image[idx];
-//         bufferg[ty][tx] = green[idx];
-
-//     }
-
-//     __syncthreads(); 
-
-//     if(tx>1 && tx<18 && ty>1 && ty<18)
-//     {
-//         int x=blockIdx.x * block_dim + tx-2, y=blockIdx.y * block_dim + ty-2;
-//         if(y<D_length && x<D_width)
-//         {
-//             int idx= y* D_width  + x;
-//             if(orientation == 0 || orientation == 3)
-//             {
-//                 if((x+y)&1)
-//                 {
-//                     if(orientation ==0)
-//                     {
-//                         if(x&1 && !(y&1))
-//                         {
-//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-//                         }
-//                         else
-//                         {
-//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-//                         }
-//                     }
-//                     else
-//                     {
-//                         if(x&1 && !(y&1))
-//                         {
-//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-                            
-//                         }
-//                         else
-//                         {
-//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-//                         }
-//                     }
-//                 }
-//                 else
-//                 {
-//                     if(orientation ==0)
-//                     {
-//                         if(y&1 && x&1)
-//                         {
-//                             red[idx] = (buffer1[ty][tx]);
-//                             blue[idx] =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         }
-//                         else 
-//                         {
-//                             blue[idx] =(buffer1[ty][tx]);
-//                             red[idx]  =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         }
-            
-//                     }
-//                     else
-//                     {
-//                         if(y&1 && x&1)
-//                         {
-//                             blue[idx] =(buffer1[ty][tx]);
-//                             red[idx]  =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         }
-//                         else 
-//                         {
-//                             red[idx]  =(buffer1[ty][tx]);
-//                             blue[idx] =(bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         }
-
-
-//                     }
-                    
-//                 }
-//             }
-
-//             if(orientation == 1 || orientation == 2)
-//             {
-//                 if(!((y+x)&1))
-//                 {
-//                     if(orientation ==1)
-//                     {
-//                         if(x&1 && y&1)
-//                         {
-//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-                            
-//                         }
-//                         else
-//                         {
-//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-//                         }
-//                     }
-//                     else
-//                     {
-//                         if(x&1 && y&1)
-//                         {
-//                             red[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                     //vertical interpolation
-//                             blue[idx]= (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                     //horizontal interpolation
-//                         }
-//                         else
-//                         {
-//                             blue[idx] = (bufferg[ty][tx]+0.5f *(buffer1[ty-1][tx]-bufferg[ty-1][tx] + (buffer1[ty+1][tx]-bufferg[ty+1][tx])));                    //vertical interpolation
-//                             red[idx]  = (bufferg[ty][tx]+0.5f *(buffer1[ty][tx-1]-bufferg[ty][tx-1] + (buffer1[ty][tx+1]-bufferg[ty][tx+1])));                    //horizontal interpolation
-//                         }
-//                     }
-//                 }
-//                 else
-//                 {
-//                     if(orientation ==1)
-//                     {
-//                         if(!(y&1) && x&1)
-//                         {
-//                             blue[idx] = (buffer1[ty][tx]);
-//                             red[idx]  = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         }
-//                         else 
-//                         {
-//                             red[idx]  = (buffer1[ty][tx]);
-//                             blue[idx] = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         }
-            
-//                     }
-//                     else
-//                     {
-//                         if(!(y&1) && x&1)
-//                         {
-//                             red[idx]  = (buffer1[ty][tx]);
-//                             blue[idx] = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         } 
-//                         else 
-//                         {
-//                             blue[idx] = (buffer1[ty][tx]);
-//                             red[idx]  = (bufferg[ty][tx]+0.25f*(buffer1[ty-1][tx-1]-bufferg[ty-1][tx-1] + buffer1[ty+1][tx+1]-bufferg[ty+1][tx+1] +buffer1[ty-1][tx+1]-bufferg[ty-1][tx+1] + buffer1[ty+1][tx-1]-bufferg[ty+1][tx-1]));
-//                         }
-
-
-//                     }
-                    
-//                 }
-//             }
-//         }
-//     }
-// }
-
 
 /* this program is an execution of edge aware interpolation of bayer domain image*/
 __global__ void DEBAYER_kernel_1(float* Image , float* output, int shared_size, int padding, int orientation)                                         //green interpolation (this is a trial to test if cooperative loading using shared memory or using threads for each halo is faster. the kernel will be replaced with most efficient one after profiling. )
@@ -999,8 +759,6 @@ __global__ void DEBAYER_kernel_2(float* Image , float* green, float* red, float*
 }
 
 
-
-
 /* this program is for applying transform matrix to the color image*/
 __global__ void Transform_Kernel(float* channel_1, float* channel_2, float* channel_3)
 {
@@ -1112,7 +870,6 @@ __global__ void Norm_kernel( float* red, float* green, float* blue,int* rint, in
 }
 
 /* this kernel performs bilateral filtering on the image*/
-
 
 __global__ void Bilateral_filter_kernel(float* channel_input, float* channel_output, int shared_size, int padding, float dim_variance, float range_variance)
 {
@@ -1298,6 +1055,8 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     float  *D_image_2 = reinterpret_cast<float *> (buffer_6);
     int array_size = cfg.width * cfg.length;
 
+    load_data(cfg);
+
     ////////////////////////////////////////////////////
     //
     //
@@ -1348,40 +1107,15 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     ////////////////////////////////////////////////////
     //
     //
-    // Executing Black Level Correction Kernel
+    // Executing Black Level Correction Kernel and Lens shading correction
     //
     //
     ////////////////////////////////////////////////////
-    if(cfg.BLC)
+    if(cfg.BLC || cfg.LSC)
     {
 
-        if(cfg.BLC_Offset.size() != 4)
-        {
-            throw std::runtime_error("BLC Offset must contain exactly 4 positive integer values");
-        }
-        cudaMemcpyToSymbol( D_BLC_Offset, cfg.BLC_Offset.data(), 4 * sizeof(float));
-
-        BLC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2);
+        BLC_LSC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2, cfg.BLC, cfg.LSC, cfg.LSC_Max_radius );
         //cudaDeviceSynchronize();
-    }
-
-    ////////////////////////////////////////////////////
-    //
-    //
-    // Executing Lens Shading Correction
-    //
-    //
-    ////////////////////////////////////////////////////
-    if(cfg.LSC)
-    {
-        if(cfg.LSC_gain.size() != 4)
-        {
-            throw std::runtime_error("LSC Gain must contain exactly 4 values");
-        }
-        cudaMemcpyToSymbol( D_LSC, cfg.LSC_gain.data(), 4 * sizeof(float));
-        LSC_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(D_image_2,cfg.LSC_Max_radius);
-        //cudaDeviceSynchronize();
-
     }
 
     ////////////////////////////////////////////////////
@@ -1422,16 +1156,70 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
             GAIN_BLUE = cfg.AWB_gain[2];
         }
 
-        if(cfg.Exposure)
+        switch (cfg.orientation)
+        {
+        case 0:
+            /* code */
+            if(cfg.Exposure)
         {
             float compensation = pow(2.0f, cfg.Exposure_value);
-            AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE,compensation, cfg.orientation);
+            AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE,compensation, 0);
             //cudaDeviceSynchronize();
         }
         else 
         {
-            AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, cfg.orientation);
+            AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, 0);
         }
+
+            break;
+
+        case 1:
+            /* code */
+            if(cfg.Exposure)
+            {
+                float compensation = pow(2.0f, cfg.Exposure_value);
+                AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE,compensation, 1);
+                //cudaDeviceSynchronize();
+            }
+            else 
+            {
+                AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, 1);
+            }
+            break;
+        case 2:
+            /* code */
+            if(cfg.Exposure)
+            {
+                float compensation = pow(2.0f, cfg.Exposure_value);
+                AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE,compensation, 2);
+                //cudaDeviceSynchronize();
+            }
+            else 
+            {
+                AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, 2);
+            }
+            break;
+        case 3:
+            /* code */
+            if(cfg.Exposure)
+            {
+                float compensation = pow(2.0f, cfg.Exposure_value);
+                AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE,compensation, 3);
+                //cudaDeviceSynchronize();
+            }
+            else 
+            {
+                AWBG_Apply_kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>( D_image_2, GAIN_RED, GAIN_GREEN, GAIN_BLUE, 3);
+            }
+            break;
+        
+        default:
+            break;
+        }
+
+
+
+        
     }
 
 
