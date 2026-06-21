@@ -11,6 +11,7 @@ from pathlib import Path as Pt
 import rawpy
 import cupy as cp
 import time
+import skimage.io
 
 cp.cuda.Device(0).use()
 
@@ -640,10 +641,27 @@ class ISPPipelineUI(tb.Window):
                 self.awb_gain_var.set( ", ".join(map(str, raw.camera_whitebalance[0:3])))
                 self.blc_offset_var.set(", ".join(map(str, raw.black_level_per_channel)))
                 self.color_correction_var.set(", ".join(map(str, raw.color_matrix[:,:3].flatten())))
-            with exiftool.ExifToolHelper(executable=EXIFTOOL_PATH) as et:
-                meta = et.get_metadata(Path)[0]
-            for k, v in meta.items():
-                self.log_data(str(k) + '  :::  ' + str(v) )
+            try:
+                with exiftool.ExifToolHelper(executable=EXIFTOOL_PATH) as et:
+                    metadata = et.get_metadata(Path)
+
+                if not metadata:
+                    self.log_data(f"No metadata found for: {Path}")
+                else:
+                    meta = metadata[0]
+                    for k, v in meta.items():
+                        self.log_data(f"{k} ::: {v}")
+
+            except FileNotFoundError:
+                self.log_data(f"File not found: {Path}")
+
+            except exiftool.exceptions.ExifToolExecuteError as e:
+                self.log_data(f"ExifTool execution failed: {e}")
+
+            except Exception as e:
+                self.log_data(f"Unexpected error while reading metadata: {e}")
+        elif Pt(Path).suffix  == '.pgm':
+            loaded_img = skimage.io.imread(Path).astype(np.uint16)
         else:
             self.log_data(f"Error: Could not load image. Unsupported format")
             return

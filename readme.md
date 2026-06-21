@@ -1,3 +1,6 @@
+<p align="center">
+  <img src="images\CISP - CUDA Image Signal Processor.png" width="900">
+</p>
 A High-Performance GPU-accelerated Cuda based Image Signal Processor(ISP) that transforms RAW Bayer data to high quality RGB output. This is a modular pipeline with tunable parameter for each operation. CISP explores the parallel nature of image processing algorithms.
 
 # Features
@@ -78,8 +81,16 @@ ISP.cu and ISP-2.cu are two different implementations of the same pipeline, refl
 - **ISP-2.cu** expects 10 1d cupy pointers of type float and int along with configuration data, and writes output directly into 3 pre-allocated integer pointers. This avoids the per-call memory allocation overhead of ISP.cu, which matters for the GUI's real-time interactive loop. ISP-2.cu is the version used in `app2.py`.
 
 # Data Flow
+<p align="center">
+  <img src="images\1.png" width="900">
+</p>
+
 
 # User Interface
+
+<p align="center">
+  <img src="images\ui.jpg" width="1500">
+</p>
 
 # How To Use
 A video demonstration of the repository is uploaded online. access through this link :: https://youtu.be/R_uROm2E-l8?si=l8i2KtWSejb-nH7R
@@ -141,7 +152,9 @@ Benchmarked on an image from the AdobeRaw dataset (present in `Sample_input`).
 |---|---|---|---|
 | 19/06/2026 | Baseline | 9.41 ms | — |
 | 20/06/2026 | Fused Lens Shading Correction + Black Level Correction kernels; grouped host-to-device transfers | 9.21 ms | 2.1% |
-| 20/06/2026 | Fused gamma + normalization kernel; precomputed constants; removed floating-point divisions | 8.405 ms | 8.74% |
+| 20/06/2026 | Fused gamma + normalization kernel; precomputed constants; removed floating-point divisions | 8.405 ms | 10.68% |
+| 21/06/2026 | major algorithm changes; fused tone control and color conversion; fused CCM and color conversion; removed possible branching | 6.5183 ms | 30.81% |
+
 
 ### Nsight Compute: before vs. after kernel fusion
 
@@ -151,26 +164,36 @@ Date- 20/06/2026
 
 Optimization 1 : Fused Lens shading correction and Black level correction kernels. made Norm kernel optional as its functions can be executed in gamma kernel if activates. Now Norm activated only when gamma is deactivated. removed floating point divisions, precomputed parameters. gain ~1ms.
 
-| | Baseline | Optimization-1 |
-|---|---|---|
-| Kernel count | 15 | 13 |
-| Summed kernel duration | 9.606 ms | 7.85 ms |
+Date- 21/06/2026
 
+Optimization 2 : Fused tone and color control and color space conversion kernel,  Fused Color correction matrix and color space conversion kernel (not fused used matrix multiplication when both activated, saves compute), Revised few blocks of code that was suspected of warp stall, Removed few reduntant blocks. ~1.58 ms.
 
+| | Baseline | Optimization-1 | optimization-2 |
+|---|---|---|---|
+| Kernel count | 15 | 13 | 10 |
+| Summed kernel duration | 9.606 ms | 7.85 ms | 6.27 ms |
+
+### optimization-1
 | Stage | Before | After | Change |
 |---|---|---|---|
-| Black Level Correction + Lens Shading Correction | `BLC_kernel` (213 us) + `LSC_kernel` (235 us) = 449 us | `BLC_LSC_kernel` = 242 us | **−46%** (one fewer kernel launch + DRAM round-trip) |
+| Black Level Correction + Lens Shading Correction | `BLC_kernel` (213 us) + `LSC_kernel` (235 us) = 449 us | `BLC_LSC_kernel` = 242 us | **−46%**  |
 | Gamma + Normalization | `LUT_kernel` (839 us) + `Norm_kernel` (738 us) = 1,576 us | `LUT_kernel_Gamma` = 817 us | **−48%** |
 
 
-### Current bottleneck (post-fusion)
+### optimization-2
+| Stage | Before | After | Change |
+|---|---|---|---|
+| Color and tone control + color space conversion YCbCr to RGB | `Color and tone control` (761 us) + `Color space conversion` (760 us) = 1521 us | `Fused kernel` = 760 us | **−50%**  |
+| color space conversion RGB to YCbCr + Color Correction Matrix | `color space conversion RGB to YCbCr` (766 us) + `Color Correction Matrix` (731 us) = 1,497 us | `LUT_kernel_Gamma` = 761 us | **−50.8%** |
 
-The latest profile points to one clear next target: **`Transform_Kernel`, `Transform_Kernel_RGB_YCbCr`, `Transform_Kernel_YCbCr_RGB`, and `Color_control_kernel`** together account for ~38% of total kernel time (3.01 ms of 7.82 ms), and every one of them runs at >90% DRAM throughput but only ~10% compute throughput. That means these kernels are memory bound kernels. They cannot be fused as they pop up in different part of the pipeline and are not cascading. These kernels need to be re written to strided multi pixel processing kernels for imporoving compute throughput.
+### optimization-3 
+
+F16 - precision implementation. upcoming.
+
 
 # Future work
 - Guided Filter
 - histogram equilization
-- image compression
 - Correctness validation (PSNR/SSIM) against a reference ISP output
 
 # References

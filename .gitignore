@@ -60,6 +60,7 @@ Thumbs.db
 
 # Profiling
 *.prof
+psnr.py
 
 # NumPy data dumps (optional)
 *.npy

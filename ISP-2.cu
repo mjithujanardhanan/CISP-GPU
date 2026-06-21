@@ -37,6 +37,7 @@ Operation::
 #include<stdlib.h>
 #include<random>
 #include<array>
+
 #include <algorithm>
 #include<vector>
 #include<pybind11/pybind11.h>
@@ -51,6 +52,8 @@ namespace py = pybind11;
 __constant__ float D_MAT_RGB_YCbCr[9] = {0.2988, 0.5869, 0.1143, -0.1687, -0.3313, 0.5, 0.5, -0.4187, -0.0813};                                                            //Matrix for kernel operations
 __constant__ float D_MAT_YCbCr_RGB[9] = {1, -0.0006, 1.4022, 1, -0.34468, -0.7139, 1, 1.77141, 0.00007};
 __constant__ float D_MAT[9];
+
+
 // __constant__ float D_BLC_Offset[4];                                                     //Black level correction 
 // __constant__ float D_LSC[4];   
 __constant__ int D_LUT[256];                                                         //Lens shading correction values
@@ -126,9 +129,10 @@ struct configuration                                                            
 
 __forceinline__ __device__ int reflect_padding(int id, int limit)
 {
+    if(id >= 0 || id < limit) return id;
+    
     if(id < 0) return -1 * id;
     else if(id >= limit) return 2*(limit-1) -id;
-    else return id;
 } 
 
 struct working_data
@@ -165,6 +169,23 @@ void load_data(configuration cfg)
 
 }
 
+void Mat_mul(float* mat1, float* mat2)
+{
+    int  dim = 3;
+    float res_mat[9],sum = 0;
+    for(int i=0; i<dim; i++)
+    {
+        for(int j=0;j<dim;j++)
+        {
+            sum = 0.0f;
+            for(int k=0;k<dim;k++)
+                sum += mat1[i * dim + k] * mat2[k * dim + j];
+            res_mat[i * dim + j] = sum;
+        }
+        
+    }
+    memcpy(mat2, res_mat, dim * dim * sizeof(float));
+}
 
 /* this program is an execution of Defective Pixel Consealment on digital bayer domain images*/
 __global__ void DP_kernel(float* Image , float* image_out, float threshold)             // Defective pixel correction Image - the image on which the operation is to be performed. Image out- the output image. Threshold- the threshold for dpc correction
@@ -543,67 +564,118 @@ __global__ void DEBAYER_kernel_1(float* Image , float* output, int shared_size, 
     __syncthreads();
 
 
+
+
     if(y<D_length && x<D_width)
     {
-        if(orientation == 0 || orientation == 3)
+
+        bool set = (orientation == 0 || orientation == 3) && (x+y) & 1 || (orientation == 1 || orientation == 2) && !((x+y)&1);
+
+        if(set)
         {
-            if( (x+y) & 1 )
+            output[idx] = buffer[ty0 * shared_size + tx0 ];
+        }
+
+        else
+        {
+            float u1 = buffer[(ty0-1) * shared_size + tx0];
+            float d1 = buffer[(ty0+1) * shared_size + tx0];
+            float central = buffer[ty0 * shared_size + tx0];
+            float u2 = buffer[(ty0-2) * shared_size + tx0];
+            float d2 = buffer[(ty0+2)* shared_size +  tx0];
+
+            float  l1    = buffer[ty0 * shared_size + (tx0-1)];
+            float  r1    = buffer[ty0 * shared_size + (tx0+1)];
+            float  l2    = buffer[ty0 * shared_size + (tx0-2)];
+            float  r2    = buffer[ty0 * shared_size + (tx0+2)];
+            
+            float t1 = 2* central -(u2 + d2);
+            float t2 = 2* central -(l2 + r2);
+
+            float dv = fabsf(u1 - d1) + fabsf(t1);
+            float dh = fabsf(l1 - r1) + fabsf(t2);
+
+
+            if (dh>dv)
+            {                                                                                                       
+                output[idx] = ((u1 + d1)*0.5 + (t1)*0.25f);
+                
+            }
+            
+            else if (dh<dv)
             {
-                output[idx] = buffer[ty0 * shared_size + tx0 ];
+                output[idx] = ((l1 + r1)*0.5 + (t2)*0.25f);
+                
             }
             else
             {
-                float dv = fabsf(buffer[(ty0-1) * shared_size + tx0] - buffer[(ty0+1) * shared_size + tx0]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]));
-                float dh = fabsf(buffer[ty0 * shared_size + (tx0-1)] - buffer[ty0 * shared_size + (tx0+1)]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]));
-
-
-                if (dh>dv)
-                {
-                    output[idx] = ((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]))*0.25f);
-                }
-                
-                else if (dh<dv)
-                {
-                    output[idx] = ((buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.25f);
-                }
-                else
-                {
-                    output[idx] = (((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0] + buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.25 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]) +2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.125f));
-                }
+                output[idx] = ((u1 + d1+ l1 + r1)*0.25 + (t1 + t2)*0.125f);
                 
             }
-
         }
 
-        else if(orientation == 1 || orientation == 2)
-        {
-            if(!((x+y)&1))
-            {
-                output[idx]=buffer[ty0 * shared_size + tx0 ];
-            }
-            else
-            {
-                float dv = fabsf(buffer[(ty0-1) * shared_size + tx0] - buffer[(ty0+1) * shared_size + tx0]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]));
-                float dh = fabsf(buffer[ty0 * shared_size + (tx0-1)] - buffer[ty0 * shared_size + (tx0+1)]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]));
+        // if(orientation == 0 || orientation == 3)
+        // {
+        //     if( (x+y) & 1 )
+        //     {
+        //         output[idx] = buffer[ty0 * shared_size + tx0 ];
+        //     }
+        //     else
+        //     {
+        //         float dv = fabsf(buffer[(ty0-1) * shared_size + tx0] - buffer[(ty0+1) * shared_size + tx0]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]));
+        //         float dh = fabsf(buffer[ty0 * shared_size + (tx0-1)] - buffer[ty0 * shared_size + (tx0+1)]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]));
 
-                if (dh>dv)
-                {
-                    output[idx] = ((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]))*0.25f);
-                }
+
+        //         if (dh>dv)
+        //         {
+        //             output[idx] = ((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]))*0.25f);
+                    
+        //         }
                 
-                else if (dh<dv)
-                {
-                    output[idx] = ((buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.25f);
-                }
-                else
-                {
-                    output[idx] = (((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0] + buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.25 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]) +2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.125f));
-                }
+        //         else if (dh<dv)
+        //         {
+        //             output[idx] = ((buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.25f);
+                    
+        //         }
+        //         else
+        //         {
+        //             output[idx] = (((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0] + buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.25 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]) +2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.125f));
+                    
+        //         }
+                
+        //     }
+
+        // }
+
+        // else if(orientation == 1 || orientation == 2)
+        // {
+        //     if(!((x+y)&1))
+        //     {
+        //         output[idx]=buffer[ty0 * shared_size + tx0 ];
+        //     }
+        //     else
+        //     {
+        //         float dv = fabsf(buffer[(ty0-1) * shared_size + tx0] - buffer[(ty0+1) * shared_size + tx0]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]));
+        //         float dh = fabsf(buffer[ty0 * shared_size + (tx0-1)] - buffer[ty0 * shared_size + (tx0+1)]) + fabsf(2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]));
+
+        //         if (dh>dv)
+        //         {
+        //             output[idx] = ((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]))*0.25f);
+        //         }
+                
+        //         else if (dh<dv)
+        //         {
+        //             output[idx] = ((buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.5 + (2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.25f);
+        //         }
+        //         else
+        //         {
+        //             output[idx] = (((buffer[(ty0-1) * shared_size + tx0] + buffer[(ty0+1) * shared_size + tx0] + buffer[ty0 * shared_size + (tx0-1)] + buffer[ty0 * shared_size + (tx0+1)])*0.25 + (2* buffer[ty0 * shared_size + tx0] -(buffer[(ty0-2) * shared_size + tx0] + buffer[(ty0+2)* shared_size +  tx0]) +2* buffer[ty0 * shared_size + tx0] -(buffer[ty0 * shared_size + (tx0-2)] + buffer[ty0 * shared_size + (tx0+2)]))*0.125f));
+        //         }
 
 
-            }
+        //     }
 
-        }
+        // }
         
     }
 
@@ -774,9 +846,9 @@ __global__ void Transform_Kernel_RGB_YCbCr(float* channel_1, float* channel_2, f
         float Temp_c2 =    channel_2[idx];
         float Temp_c3 =    channel_3[idx];
 
-        channel_1[idx] =     (D_MAT_RGB_YCbCr[0] * Temp_c1 + D_MAT_RGB_YCbCr[1] * Temp_c2 + D_MAT_RGB_YCbCr[2] * Temp_c3);
-        channel_2[idx]=      (D_MAT_RGB_YCbCr[3] * Temp_c1 + D_MAT_RGB_YCbCr[4] * Temp_c2 + D_MAT_RGB_YCbCr[5] * Temp_c3);
-        channel_3[idx]=      (D_MAT_RGB_YCbCr[6] * Temp_c1 + D_MAT_RGB_YCbCr[7] * Temp_c2 + D_MAT_RGB_YCbCr[8] * Temp_c3);
+        channel_1[idx] =  (D_MAT_RGB_YCbCr[0] * Temp_c1 + D_MAT_RGB_YCbCr[1] * Temp_c2 + D_MAT_RGB_YCbCr[2] * Temp_c3);   
+        channel_2[idx] =  (D_MAT_RGB_YCbCr[3] * Temp_c1 + D_MAT_RGB_YCbCr[4] * Temp_c2 + D_MAT_RGB_YCbCr[5] * Temp_c3);
+        channel_3[idx] =  (D_MAT_RGB_YCbCr[6] * Temp_c1 + D_MAT_RGB_YCbCr[7] * Temp_c2 + D_MAT_RGB_YCbCr[8] * Temp_c3);
 
 
     }
@@ -796,14 +868,13 @@ __global__ void Transform_Kernel_YCbCr_RGB(float* channel_1, float* channel_2, f
         float Temp_c3 =    channel_3[idx];
 
         channel_1[idx] =     (D_MAT_YCbCr_RGB[0] * Temp_c1 + D_MAT_YCbCr_RGB[1] * Temp_c2 + D_MAT_YCbCr_RGB[2] * Temp_c3);
-        channel_2[idx]=      (D_MAT_YCbCr_RGB[3] * Temp_c1 + D_MAT_YCbCr_RGB[4] * Temp_c2 + D_MAT_YCbCr_RGB[5] * Temp_c3);
-        channel_3[idx]=      (D_MAT_YCbCr_RGB[6] * Temp_c1 + D_MAT_YCbCr_RGB[7] * Temp_c2 + D_MAT_YCbCr_RGB[8] * Temp_c3);
-
+        channel_2[idx] =     (D_MAT_YCbCr_RGB[3] * Temp_c1 + D_MAT_YCbCr_RGB[4] * Temp_c2 + D_MAT_YCbCr_RGB[5] * Temp_c3);
+        channel_3[idx] =     (D_MAT_YCbCr_RGB[6] * Temp_c1 + D_MAT_YCbCr_RGB[7] * Temp_c2 + D_MAT_YCbCr_RGB[8] * Temp_c3);
 
     }
 }
 
-__global__ void Transform_Kernel(float* channel_1, float* channel_2, float* channel_3)
+__global__ void Transform_Kernel(float* channel_1, float* channel_2, float* channel_3, float mat0, float mat1, float mat2, float mat3, float mat4, float mat5, float mat6, float mat7, float mat8)
 {
     int x=blockIdx.x * blockDim.x + threadIdx.x, y=blockIdx.y * blockDim.y + threadIdx.y;
     
@@ -816,9 +887,9 @@ __global__ void Transform_Kernel(float* channel_1, float* channel_2, float* chan
         float Temp_c2 =    channel_2[idx];
         float Temp_c3 =    channel_3[idx];
 
-        channel_1[idx] =     (D_MAT[0] * Temp_c1 + D_MAT[1] * Temp_c2 + D_MAT[2] * Temp_c3);
-        channel_2[idx]=      (D_MAT[3] * Temp_c1 + D_MAT[4] * Temp_c2 + D_MAT[5] * Temp_c3);
-        channel_3[idx]=      (D_MAT[6] * Temp_c1 + D_MAT[7] * Temp_c2 + D_MAT[8] * Temp_c3);
+        channel_1[idx] =     (mat0 * Temp_c1 + mat1 * Temp_c2 + mat2 * Temp_c3);
+        channel_2[idx]=      (mat3 * Temp_c1 + mat4 * Temp_c2 + mat5 * Temp_c3);
+        channel_3[idx]=      (mat6 * Temp_c1 + mat7 * Temp_c2 + mat8 * Temp_c3);
 
 
     }
@@ -925,9 +996,18 @@ __global__ void Color_control_kernel( float* channel_1, float* channel_2, float*
             c2 = gain * c2;
             c3 = gain * c3;
         }
-        channel_1[idx] = c1;
-        channel_2[idx] = c2;
-        channel_3[idx] = c3;
+
+        
+
+        channel_1[idx] =     (D_MAT_YCbCr_RGB[0] * c1 + D_MAT_YCbCr_RGB[1] * c2 + D_MAT_YCbCr_RGB[2] * c3);
+        channel_2[idx] =     (D_MAT_YCbCr_RGB[3] * c1 + D_MAT_YCbCr_RGB[4] * c2 + D_MAT_YCbCr_RGB[5] * c3);
+        channel_3[idx] =     (D_MAT_YCbCr_RGB[6] * c1 + D_MAT_YCbCr_RGB[7] * c2 + D_MAT_YCbCr_RGB[8] * c3);
+
+        // channel_1[idx] =     c1;
+        // channel_2[idx] =     c2;
+        // channel_3[idx] =     c3;
+
+
     
     }
 }
@@ -974,7 +1054,9 @@ __global__ void Bilateral_filter_kernel(float* channel_input, float* channel_out
             {
                 float neighbor_pixel = buffer[(ty0 + i) * shared_size +(tx0+j)],temp, diff = central_pixel - neighbor_pixel;
 
-                temp = __expf( -(( i*i + j*j )*(spatial_pdt) + ((diff )*(diff) )* (range_pdt)));
+                temp = (( i*i + j*j )*(spatial_pdt) + ((diff )*(diff) )* (range_pdt));
+
+                temp = __expf( - temp);
 
                 norm_sum += temp;
                 kernel_sum += neighbor_pixel* temp;
@@ -1430,9 +1512,20 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
         {
             throw std::runtime_error("CCM must contain exactly 9 floats");
         }
+        
+        float matrix2[9] ;
+        memcpy(matrix2, cfg.CCM_gain.data(), 9 * sizeof(float));
+        
 
-        cudaMemcpyToSymbol( D_MAT, cfg.CCM_gain.data(), 9 * sizeof(float));
-        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
+        if(cfg.Color_Space_Conversion)
+        {
+            float matrix1[] = {0.2988, 0.5869, 0.1143, -0.1687, -0.3313, 0.5, 0.5, -0.4187, -0.0813};
+            Mat_mul(matrix1 ,  matrix2);
+        }
+        
+
+        // cudaMemcpyToSymbol( D_MAT, cfg.CCM_gain.data(), 9 * sizeof(float));
+        Transform_Kernel<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2, matrix2[0], matrix2[1], matrix2[2], matrix2[3], matrix2[4], matrix2[5], matrix2[6], matrix2[7], matrix2[8]);
         //cudaDeviceSynchronize();
     }
 
@@ -1449,8 +1542,9 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     //  Channel_0 :: Y   Channel_1 :: Cb    Channel_2 :: Cr
     //
     ////////////////////////////////////////////////////
-    if(cfg.Color_Space_Conversion)
+    if(cfg.Color_Space_Conversion && !cfg.CCM)
     {
+
         Transform_Kernel_RGB_YCbCr<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
         //cudaDeviceSynchronize();
     }
@@ -1642,7 +1736,7 @@ float ISP(uint64_t Input_image, uint64_t buffer_1, uint64_t buffer_2, uint64_t b
     //  Channel_0 :: R   Channel_1 :: G    Channel_2 :: B
     //
     ////////////////////////////////////////////////////
-    if(cfg.Color_Space_Conversion)
+    if(cfg.Color_Space_Conversion && !(cfg.Brightness|| cfg.Saturation || cfg.Hue || cfg.Contrast || cfg.Tint || cfg.Vibrance) ) // 
     {
         Transform_Kernel_YCbCr_RGB<<<dim3(blockx,blocky),dim3(block_dim,block_dim)>>>(CHANNEL_0, CHANNEL_1, CHANNEL_2);
         //cudaDeviceSynchronize();
