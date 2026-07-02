@@ -1,6 +1,9 @@
 <p align="center">
   <img src="images\CISP - CUDA Image Signal Processor.png" width="900">
 </p>
+
+A video demonstration of the repository is uploaded online. access through this link :: https://youtu.be/R_uROm2E-l8?si=l8i2KtWSejb-nH7R
+
 A High-Performance GPU-accelerated Cuda based Image Signal Processor(ISP) that transforms RAW Bayer data to high quality RGB output. This is a modular pipeline with tunable parameter for each operation. CISP explores the parallel nature of image processing algorithms.
 
 # Features
@@ -93,7 +96,10 @@ ISP.cu and ISP-2.cu are two different implementations of the same pipeline, refl
 </p>
 
 # How To Use
-A video demonstration of the repository is uploaded online. access through this link :: https://youtu.be/R_uROm2E-l8?si=l8i2KtWSejb-nH7R
+
+### Software Requirements
+ C++ version required :  17 
+ min cmake version : 3.18
 
 clone repository :
 
